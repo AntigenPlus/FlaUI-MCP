@@ -146,36 +146,20 @@ public class TableTool : ToolBase
 
     private McpToolResult ReadViaTreeWalking(AutomationElement element, string? rowsParam, string? columnsParam)
     {
-        // Find header items
-        var headerElements = element.FindAllChildren(c =>
-            c.ByControlType(ControlType.Header));
-        var headers = new List<string>();
-        if (headerElements.Length > 0)
-        {
-            var headerItems = headerElements[0].FindAllChildren(c =>
-                c.ByControlType(ControlType.HeaderItem));
-            foreach (var item in headerItems)
-            {
-                headers.Add(item.Properties.Name.ValueOrDefault ?? "");
-            }
-        }
-
         // Find data rows
         var dataItems = element.FindAllChildren(c =>
             c.ByControlType(ControlType.DataItem));
         int totalRows = dataItems.Length;
 
-        // If no headers found, generate default names
-        int totalCols = headers.Count;
-        if (totalCols == 0 && dataItems.Length > 0)
+        // Determine column count from the first data row if available
+        int totalCols = 0;
+        if (dataItems.Length > 0)
         {
-            var firstRowCells = dataItems[0].FindAllChildren();
-            totalCols = firstRowCells.Length;
-            for (int i = 0; i < totalCols; i++)
-            {
-                headers.Add($"Column{i}");
-            }
+            totalCols = dataItems[0].FindAllChildren().Length;
         }
+
+        // Use the shared header detection logic
+        var headers = GetColumnHeaders(element, totalCols);
 
         // Determine which columns to include
         var (columnIndices, columnNames) = FilterColumns(headers, columnsParam, totalCols);
@@ -224,6 +208,36 @@ public class TableTool : ToolBase
 
     private List<string> GetColumnHeaders(AutomationElement element, int totalCols)
     {
+        List<string> headers;
+
+        // Strategy 1: Find a Header container with HeaderItem children (standard WPF/Win32 tables)
+        headers = TryHeaderContainerWithHeaderItems(element);
+        if (HasMeaningfulNames(headers))
+            return PadHeaders(headers, totalCols);
+
+        // Strategy 2: Find Header descendants at any depth (WinForms DataGridView uses
+        // ControlType.Header for individual column headers, not HeaderItem)
+        headers = TryDescendantsByType(element, ControlType.Header);
+        if (HasMeaningfulNames(headers))
+            return PadHeaders(headers, totalCols);
+
+        // Strategy 3: Find HeaderItem descendants at any depth
+        headers = TryDescendantsByType(element, ControlType.HeaderItem);
+        if (HasMeaningfulNames(headers))
+            return PadHeaders(headers, totalCols);
+
+        // Strategy 4: Use cell names from the first DataItem row
+        headers = TryCellNamesFromFirstRow(element);
+        if (HasMeaningfulNames(headers))
+            return PadHeaders(headers, totalCols);
+
+        // Strategy 5: Fall back to generic Column0, Column1, etc.
+        headers = new List<string>();
+        return PadHeaders(headers, totalCols);
+    }
+
+    private List<string> TryHeaderContainerWithHeaderItems(AutomationElement element)
+    {
         var headers = new List<string>();
         var headerElements = element.FindAllChildren(c =>
             c.ByControlType(ControlType.Header));
@@ -236,13 +250,49 @@ public class TableTool : ToolBase
                 headers.Add(item.Properties.Name.ValueOrDefault ?? "");
             }
         }
+        return headers;
+    }
 
-        // Pad with default names if needed
+    private List<string> TryDescendantsByType(AutomationElement element, ControlType controlType)
+    {
+        var headers = new List<string>();
+        var descendants = element.FindAllDescendants(cf => cf.ByControlType(controlType));
+        foreach (var desc in descendants)
+        {
+            var name = desc.Properties.Name.ValueOrDefault ?? "";
+            headers.Add(name);
+        }
+        return headers;
+    }
+
+    private List<string> TryCellNamesFromFirstRow(AutomationElement element)
+    {
+        var headers = new List<string>();
+        var dataItems = element.FindAllChildren(c =>
+            c.ByControlType(ControlType.DataItem));
+        if (dataItems.Length > 0)
+        {
+            var cells = dataItems[0].FindAllChildren();
+            foreach (var cell in cells)
+            {
+                var name = cell.Properties.Name.ValueOrDefault ?? "";
+                headers.Add(name);
+            }
+        }
+        return headers;
+    }
+
+    private static bool HasMeaningfulNames(List<string> headers)
+    {
+        return headers.Count > 0 && headers.Any(h => !string.IsNullOrEmpty(h));
+    }
+
+    private static List<string> PadHeaders(List<string> headers, int totalCols)
+    {
         while (headers.Count < totalCols)
         {
             headers.Add($"Column{headers.Count}");
         }
-
         return headers;
     }
 
