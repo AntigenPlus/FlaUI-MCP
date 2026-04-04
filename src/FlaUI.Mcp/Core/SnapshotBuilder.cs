@@ -11,11 +11,13 @@ public class SnapshotBuilder
 {
     private readonly ElementRegistry _elementRegistry;
     private readonly int _maxDepth;
+    private readonly int _maxTableRows;
 
-    public SnapshotBuilder(ElementRegistry elementRegistry, int maxDepth = 10)
+    public SnapshotBuilder(ElementRegistry elementRegistry, int maxDepth = 10, int maxTableRows = 5)
     {
         _elementRegistry = elementRegistry;
         _maxDepth = maxDepth;
+        _maxTableRows = maxTableRows;
     }
 
     public string BuildSnapshot(string windowHandle, AutomationElement root)
@@ -51,9 +53,53 @@ public class SnapshotBuilder
         try
         {
             var children = element.FindAllChildren();
-            foreach (var child in children)
+
+            // For table/grid elements, limit the number of data rows shown
+            if (role is "table" or "grid")
             {
-                BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                var rowCount = 0;
+                var totalRows = 0;
+
+                foreach (var child in children)
+                {
+                    var childRole = GetElementRole(child);
+
+                    // Always include headers
+                    if (childRole is "header" or "columnheader")
+                    {
+                        BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                        continue;
+                    }
+
+                    // Count data rows
+                    if (childRole is "row")
+                    {
+                        totalRows++;
+                        if (rowCount < _maxTableRows)
+                        {
+                            BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                            rowCount++;
+                        }
+                        continue;
+                    }
+
+                    // Include other children normally (e.g., scrollbars)
+                    BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                }
+
+                if (totalRows > _maxTableRows)
+                {
+                    var remaining = totalRows - _maxTableRows;
+                    var childIndent = new string(' ', (depth + 1) * 2);
+                    sb.AppendLine($"{childIndent}... and {remaining} more rows");
+                }
+            }
+            else
+            {
+                foreach (var child in children)
+                {
+                    BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                }
             }
         }
         catch
