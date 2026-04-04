@@ -86,6 +86,22 @@ public class FindTool : ToolBase
                 {
                     return Task.FromResult(ErrorResult($"Window not found: {handle}"));
                 }
+
+                // Re-find the window from desktop to get fresh element tree
+                // This avoids stale cached properties from a previous snapshot
+                try
+                {
+                    var desktop = _sessionManager.Automation.GetDesktop();
+                    var freshWindow = desktop.FindFirstDescendant(cf => cf.ByName(window.Title))?.AsWindow();
+                    if (freshWindow != null)
+                    {
+                        window = freshWindow;
+                    }
+                }
+                catch
+                {
+                    // Fall through to use the cached window if refresh fails
+                }
             }
             else
             {
