@@ -36,6 +36,12 @@ public class SnapshotTool : ToolBase
             {
                 type = "string",
                 description = "Window handle from windows_launch or windows_list_windows. If omitted, uses the most recently launched window."
+            },
+            backend = new
+            {
+                type = "string",
+                @enum = new[] { "uia3", "uia2" },
+                description = "Automation backend to use. UIA3 (default) works best for WPF/UWP. UIA2 may provide better results for older WinForms controls."
             }
         }
     };
@@ -43,6 +49,7 @@ public class SnapshotTool : ToolBase
     public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
         var handle = GetStringArgument(arguments, "handle");
+        var backend = GetStringArgument(arguments, "backend");
 
         try
         {
@@ -61,7 +68,7 @@ public class SnapshotTool : ToolBase
                 // Get the foreground window
                 var desktop = _sessionManager.Automation.GetDesktop();
                 var focusedElement = _sessionManager.Automation.FocusedElement();
-                
+
                 if (focusedElement != null)
                 {
                     // Walk up to find the window
@@ -84,6 +91,19 @@ public class SnapshotTool : ToolBase
 
                 // Register this window
                 handle = _sessionManager.RegisterWindow(window);
+            }
+
+            // If UIA2 backend requested, re-find the window using UIA2
+            if (string.Equals(backend, "uia2", StringComparison.OrdinalIgnoreCase))
+            {
+                var uia2 = _sessionManager.UIA2Automation;
+                var uia2Desktop = uia2.GetDesktop();
+                var windowTitle = window.Title;
+                var uia2Window = uia2Desktop.FindFirstDescendant(cf => cf.ByName(windowTitle))?.AsWindow();
+                if (uia2Window != null)
+                {
+                    window = uia2Window;
+                }
             }
 
             var snapshot = _snapshotBuilder.BuildSnapshot(handle!, window);
