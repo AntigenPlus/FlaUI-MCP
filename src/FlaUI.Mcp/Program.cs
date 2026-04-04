@@ -18,6 +18,7 @@ toolRegistry.RegisterTool(new ScreenshotTool(sessionManager, elementRegistry));
 toolRegistry.RegisterTool(new ListWindowsTool(sessionManager));
 toolRegistry.RegisterTool(new FocusWindowTool(sessionManager));
 toolRegistry.RegisterTool(new CloseWindowTool(sessionManager));
+toolRegistry.RegisterTool(new WaitTool(sessionManager, elementRegistry));
 toolRegistry.RegisterTool(new BatchTool(sessionManager, elementRegistry));
 
 // Create and run MCP server
