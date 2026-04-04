@@ -1,5 +1,6 @@
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
+using FlaUI.UIA2;
 using FlaUI.UIA3;
 using FlaUIApplication = FlaUI.Core.Application;
 
@@ -11,6 +12,7 @@ namespace PlaywrightWindows.Mcp.Core;
 public class SessionManager : IDisposable
 {
     private readonly UIA3Automation _automation;
+    private UIA2Automation? _uia2Automation;
     private readonly Dictionary<string, FlaUIApplication> _applications = new();
     private readonly Dictionary<string, Window> _windows = new();
     private int _appCounter = 0;
@@ -22,6 +24,8 @@ public class SessionManager : IDisposable
     }
 
     public UIA3Automation Automation => _automation;
+
+    public UIA2Automation UIA2Automation => _uia2Automation ??= new UIA2Automation();
 
     public (string handle, Window window) LaunchApp(string appPath, string[]? args = null)
     {
@@ -182,6 +186,7 @@ public class SessionManager : IDisposable
         }
         _applications.Clear();
         _windows.Clear();
+        _uia2Automation?.Dispose();
         _automation.Dispose();
     }
 }

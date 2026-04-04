@@ -72,6 +72,12 @@ public class BatchTool : ToolBase
                         {
                             type = "string",
                             description = "Window handle for snapshot action"
+                        },
+                        backend = new
+                        {
+                            type = "string",
+                            @enum = new[] { "uia3", "uia2" },
+                            description = "Automation backend for snapshot action. UIA3 (default) works best for WPF/UWP. UIA2 may provide better results for older WinForms controls."
                         }
                     },
                     required = new[] { "action" }
@@ -233,7 +239,8 @@ public class BatchTool : ToolBase
     private string ExecuteSnapshot(JsonElement action)
     {
         var handle = action.TryGetProperty("handle", out var handleProp) ? handleProp.GetString() : null;
-        
+        var backend = action.TryGetProperty("backend", out var backendProp) ? backendProp.GetString() : null;
+
         Window? window = null;
         if (!string.IsNullOrEmpty(handle))
         {
@@ -266,6 +273,19 @@ public class BatchTool : ToolBase
         if (window == null)
         {
             return "No window found";
+        }
+
+        // If UIA2 backend requested, re-find the window using UIA2
+        if (string.Equals(backend, "uia2", StringComparison.OrdinalIgnoreCase))
+        {
+            var uia2 = _sessionManager.UIA2Automation;
+            var uia2Desktop = uia2.GetDesktop();
+            var windowTitle = window.Title;
+            var uia2Window = uia2Desktop.FindFirstDescendant(cf => cf.ByName(windowTitle))?.AsWindow();
+            if (uia2Window != null)
+            {
+                window = uia2Window;
+            }
         }
 
         var snapshot = _snapshotBuilder.BuildSnapshot(handle!, window);
