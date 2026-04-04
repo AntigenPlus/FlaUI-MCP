@@ -194,6 +194,12 @@ public class WaitTool : ToolBase
             catch
             {
                 // UI elements can go stale or become inaccessible during transitions
+                // For "gone" state, an exception accessing the element means it's gone
+                if (state == "gone")
+                {
+                    var elapsed = sw.Elapsed.TotalSeconds;
+                    return TextResult($"OK (element gone after {elapsed:F1}s)");
+                }
             }
 
             await Task.Delay(250);
