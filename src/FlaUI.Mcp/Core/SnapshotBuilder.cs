@@ -62,7 +62,14 @@ public class SnapshotBuilder
         }
     }
 
-    private string BuildElementLine(AutomationElement element, string refId, string? name, string role)
+    public static string FormatElementLine(AutomationElement element, string refId)
+    {
+        var name = GetElementName(element);
+        var role = GetElementRole(element);
+        return BuildElementLine(element, refId, name, role);
+    }
+
+    private static string BuildElementLine(AutomationElement element, string refId, string? name, string role)
     {
         var parts = new List<string>();
 
@@ -88,7 +95,7 @@ public class SnapshotBuilder
         return string.Join(" ", parts);
     }
 
-    private string GetElementRole(AutomationElement element)
+    public static string GetElementRole(AutomationElement element)
     {
         try
         {
@@ -141,7 +148,7 @@ public class SnapshotBuilder
         }
     }
 
-    private string? GetElementName(AutomationElement element)
+    public static string? GetElementName(AutomationElement element)
     {
         try
         {
@@ -163,7 +170,7 @@ public class SnapshotBuilder
         }
     }
 
-    private List<string> GetStateIndicators(AutomationElement element)
+    public static List<string> GetStateIndicators(AutomationElement element)
     {
         var states = new List<string>();
 
@@ -246,7 +253,7 @@ public class SnapshotBuilder
         return false;
     }
 
-    private string EscapeName(string name)
+    public static string EscapeName(string name)
     {
         return name
             .Replace("\\", "\\\\")
