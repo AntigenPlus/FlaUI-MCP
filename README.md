@@ -102,6 +102,7 @@ Or using `dotnet run`:
 | `windows_focus` | Bring a window to foreground |
 | `windows_close` | Close a window |
 | `windows_batch` | Execute multiple actions in one call |
+| `windows_wait` | Wait for an element to reach a target state |
 
 ## How It Works
 
