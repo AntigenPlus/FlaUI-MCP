@@ -299,9 +299,16 @@ public class SnapshotBuilder
         {
             var children = element.FindAllChildren();
             if (children.Length == 0) return false;
-            // If the first child is a header/columnheader, treat the parent as a header container
-            var firstChildType = children[0].Properties.ControlType.ValueOrDefault;
-            return firstChildType == ControlType.Header || firstChildType == ControlType.HeaderItem;
+            // A header container has ALL children as headers (e.g., "Top Row" with column headers).
+            // Data rows may have a single row-header child plus data cells, so checking just the
+            // first child is not sufficient.
+            foreach (var child in children)
+            {
+                var childType = child.Properties.ControlType.ValueOrDefault;
+                if (childType != ControlType.Header && childType != ControlType.HeaderItem)
+                    return false;
+            }
+            return true;
         }
         catch
         {
