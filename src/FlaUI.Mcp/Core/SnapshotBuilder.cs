@@ -54,44 +54,45 @@ public class SnapshotBuilder
         {
             var children = element.FindAllChildren();
 
-            // For table/grid elements, limit the number of data rows shown
-            if (role is "table" or "grid")
+            // For table/grid/list elements, limit the number of data rows/items shown
+            if (role is "table" or "grid" or "list")
             {
-                var rowCount = 0;
-                var totalRows = 0;
+                var itemCount = 0;
+                var totalItems = 0;
 
                 foreach (var child in children)
                 {
                     var childRole = GetElementRole(child);
 
-                    // Always include headers
-                    if (childRole is "header" or "columnheader")
+                    // Always include headers and structural elements (scrollbars, etc.)
+                    if (childRole is "header" or "columnheader" or "scrollbar" or "thumb")
                     {
                         BuildElementSnapshot(sb, windowHandle, child, depth + 1);
                         continue;
                     }
 
-                    // Count data rows
-                    if (childRole is "row")
+                    // Check if this element is a header container (contains header children)
+                    // e.g., DataGridView has an "element" named "Top Row" with header children
+                    if (IsHeaderContainer(child))
                     {
-                        totalRows++;
-                        if (rowCount < _maxTableRows)
-                        {
-                            BuildElementSnapshot(sb, windowHandle, child, depth + 1);
-                            rowCount++;
-                        }
+                        BuildElementSnapshot(sb, windowHandle, child, depth + 1);
                         continue;
                     }
 
-                    // Include other children normally (e.g., scrollbars)
-                    BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                    // Everything else is a data item (row, listitem, or element with row-like content)
+                    totalItems++;
+                    if (itemCount < _maxTableRows)
+                    {
+                        BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                        itemCount++;
+                    }
                 }
 
-                if (totalRows > _maxTableRows)
+                if (totalItems > _maxTableRows)
                 {
-                    var remaining = totalRows - _maxTableRows;
+                    var remaining = totalItems - _maxTableRows;
                     var childIndent = new string(' ', (depth + 1) * 2);
-                    sb.AppendLine($"{childIndent}... and {remaining} more rows");
+                    sb.AppendLine($"{childIndent}... and {remaining} more {(role == "list" ? "items" : "rows")}");
                 }
             }
             else
@@ -290,6 +291,22 @@ public class SnapshotBuilder
         }
 
         return false;
+    }
+
+    private static bool IsHeaderContainer(AutomationElement element)
+    {
+        try
+        {
+            var children = element.FindAllChildren();
+            if (children.Length == 0) return false;
+            // If the first child is a header/columnheader, treat the parent as a header container
+            var firstChildType = children[0].Properties.ControlType.ValueOrDefault;
+            return firstChildType == ControlType.Header || firstChildType == ControlType.HeaderItem;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private string EscapeName(string name)
