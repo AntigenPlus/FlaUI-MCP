@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 13 integration tests covering snapshot, click, and text tools
   - Shared test fixture for stable window handles across test runs
 
+### Changed
+- `windows_snapshot` now limits DataGridView row expansion to prevent oversized snapshots (configurable via `maxTableRows` parameter, default 5)
+
 ## [0.1.0] - 2024-02-02
 
 ### Added
