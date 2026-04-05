@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - WpfTestApp: equivalent WPF controls for cross-framework validation
   - 13 integration tests covering snapshot, click, and text tools
   - Shared test fixture for stable window handles across test runs
+- `windows_press_key` tool for sending keyboard input (individual keys and modifier combinations)
 
 ## [0.1.0] - 2024-02-02
 
