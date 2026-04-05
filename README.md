@@ -102,6 +102,7 @@ Or using `dotnet run`:
 | `windows_focus` | Bring a window to foreground |
 | `windows_close` | Close a window |
 | `windows_batch` | Execute multiple actions in one call |
+| `windows_get_value` | Get an element's value via the Value pattern |
 
 ## How It Works
 
