@@ -51,12 +51,12 @@ public class PressKeyTool : ToolBase
         required = new[] { "key" }
     };
 
-    public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
+    public override async Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
         var keyName = GetStringArgument(arguments, "key");
         if (string.IsNullOrEmpty(keyName))
         {
-            return Task.FromResult(ErrorResult("Missing required argument: key"));
+            return ErrorResult("Missing required argument: key");
         }
 
         var modifiers = GetArgument<string[]>(arguments, "modifiers") ?? Array.Empty<string>();
@@ -70,17 +70,17 @@ public class PressKeyTool : ToolBase
                 var element = _elementRegistry.GetElement(refId);
                 if (element == null)
                 {
-                    return Task.FromResult(ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs."));
+                    return ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs.");
                 }
 
                 element.Focus();
-                Thread.Sleep(50);
+                await Task.Delay(50);
             }
 
             var vk = MapKeyName(keyName);
             if (vk == null)
             {
-                return Task.FromResult(ErrorResult($"Unknown key: '{keyName}'"));
+                return ErrorResult($"Unknown key: '{keyName}'");
             }
 
             // Build modifier list
@@ -96,7 +96,7 @@ public class PressKeyTool : ToolBase
                 };
                 if (modKey == null)
                 {
-                    return Task.FromResult(ErrorResult($"Unknown modifier: '{mod}'. Use 'ctrl', 'shift', or 'alt'."));
+                    return ErrorResult($"Unknown modifier: '{mod}'. Use 'ctrl', 'shift', or 'alt'.");
                 }
                 modifierKeys.Add(modKey.Value);
             }
@@ -115,11 +115,11 @@ public class PressKeyTool : ToolBase
             // Build description
             var desc = string.Join("+", modifiers.Select(m => m.ToUpperInvariant()).Append(keyName));
             var target = string.IsNullOrEmpty(refId) ? "" : $" (focused {refId})";
-            return Task.FromResult(TextResult($"Pressed {desc}{target}"));
+            return TextResult($"Pressed {desc}{target}");
         }
         catch (Exception ex)
         {
-            return Task.FromResult(ErrorResult($"Failed to press key: {ex.Message}"));
+            return ErrorResult($"Failed to press key: {ex.Message}");
         }
     }
 
