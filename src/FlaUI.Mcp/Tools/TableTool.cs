@@ -75,13 +75,30 @@ public class TableTool : ToolBase
             var rowsParam = GetStringArgument(arguments, "rows");
             var columnsParam = GetStringArgument(arguments, "columns");
 
-            // Try Grid pattern first
-            if (element.Patterns.Grid.IsSupported)
+            // Check if the table has standard DataItem rows (WPF/modern controls)
+            // or non-standard children (WinForms DataGridView uses Custom type for rows)
+            var hasDataItemRows = false;
+            try
             {
-                return Task.FromResult(ReadViaGridPattern(element, rowsParam, columnsParam));
+                var dataItems = element.FindAllChildren(c => c.ByControlType(ControlType.DataItem));
+                hasDataItemRows = dataItems.Length > 0;
+            }
+            catch { }
+
+            // Use Grid pattern only if we have standard DataItem rows
+            if (hasDataItemRows && element.Patterns.Grid.IsSupported)
+            {
+                try
+                {
+                    return Task.FromResult(ReadViaGridPattern(element, rowsParam, columnsParam));
+                }
+                catch
+                {
+                    // Grid pattern may throw even with DataItem rows; fall through
+                }
             }
 
-            // Fall back to tree walking
+            // Fall back to generic tree walking that handles non-standard row types
             return Task.FromResult(ReadViaTreeWalking(element, rowsParam, columnsParam));
         }
         catch (Exception ex)
@@ -146,16 +163,36 @@ public class TableTool : ToolBase
 
     private McpToolResult ReadViaTreeWalking(AutomationElement element, string? rowsParam, string? columnsParam)
     {
-        // Find data rows
-        var dataItems = element.FindAllChildren(c =>
-            c.ByControlType(ControlType.DataItem));
+        // Find data rows — try DataItem first, then fall back to any named "Row N" children
+        var allChildren = element.FindAllChildren();
+        var dataItems = allChildren
+            .Where(c =>
+            {
+                try
+                {
+                    var ct = c.Properties.ControlType.ValueOrDefault;
+                    if (ct == ControlType.DataItem) return true;
+                    // WinForms DataGridView uses Custom type with "Row N" names
+                    var name = c.Properties.Name.ValueOrDefault ?? "";
+                    return name.StartsWith("Row ") && ct != ControlType.Header
+                        && ct != ControlType.ScrollBar;
+                }
+                catch { return false; }
+            })
+            .ToArray();
         int totalRows = dataItems.Length;
 
-        // Determine column count from the first data row if available
+        // Determine column count from the first data row's children (excluding row headers)
         int totalCols = 0;
         if (dataItems.Length > 0)
         {
-            totalCols = dataItems[0].FindAllChildren().Length;
+            var firstRowChildren = dataItems[0].FindAllChildren();
+            // Exclude row header children (e.g., "Row 0" header in WinForms DataGridView)
+            totalCols = firstRowChildren.Count(c =>
+            {
+                try { return c.Properties.ControlType.ValueOrDefault != ControlType.Header; }
+                catch { return true; }
+            });
         }
 
         // Use the shared header detection logic
@@ -189,11 +226,18 @@ public class TableTool : ToolBase
         // Data rows
         for (int row = startRow; row <= endRow && row < totalRows; row++)
         {
-            var cells = dataItems[row].FindAllChildren();
+            // Get data cells, excluding row header elements
+            var allCells = dataItems[row].FindAllChildren();
+            var dataCells = allCells.Where(c =>
+            {
+                try { return c.Properties.ControlType.ValueOrDefault != ControlType.Header; }
+                catch { return true; }
+            }).ToArray();
+
             sb.Append('|');
             foreach (var col in columnIndices)
             {
-                var value = col < cells.Length ? GetCellValue(cells[col]) : "";
+                var value = col < dataCells.Length ? GetCellValue(dataCells[col]) : "";
                 sb.Append($" {EscapePipe(value)} |");
             }
             sb.AppendLine();
@@ -215,9 +259,9 @@ public class TableTool : ToolBase
         if (HasMeaningfulNames(headers))
             return PadHeaders(headers, totalCols);
 
-        // Strategy 2: Find Header descendants at any depth (WinForms DataGridView uses
-        // ControlType.Header for individual column headers, not HeaderItem)
-        headers = TryDescendantsByType(element, ControlType.Header);
+        // Strategy 2: Find the header row container and extract Header children
+        // (WinForms DataGridView has a "Top Row" element with Header children)
+        headers = TryHeaderRowContainer(element);
         if (HasMeaningfulNames(headers))
             return PadHeaders(headers, totalCols);
 
@@ -250,6 +294,55 @@ public class TableTool : ToolBase
                 headers.Add(item.Properties.Name.ValueOrDefault ?? "");
             }
         }
+        return headers;
+    }
+
+    private List<string> TryHeaderRowContainer(AutomationElement element)
+    {
+        // Look for a child element whose children are all Headers (the header row container).
+        // Skip the first header in each container if it's a corner cell (e.g., "Top Left Header Cell").
+        var headers = new List<string>();
+        try
+        {
+            var children = element.FindAllChildren();
+            foreach (var child in children)
+            {
+                try
+                {
+                    var ct = child.Properties.ControlType.ValueOrDefault;
+                    // Skip scrollbars and known non-header containers
+                    if (ct == ControlType.ScrollBar) continue;
+
+                    var grandchildren = child.FindAllChildren();
+                    if (grandchildren.Length == 0) continue;
+
+                    // Check if most children are Headers (the header row)
+                    var headerChildren = grandchildren
+                        .Where(gc =>
+                        {
+                            try { return gc.Properties.ControlType.ValueOrDefault == ControlType.Header; }
+                            catch { return false; }
+                        })
+                        .ToArray();
+
+                    if (headerChildren.Length >= 2 && headerChildren.Length >= grandchildren.Length / 2)
+                    {
+                        // Found the header row — extract names, skip corner cell
+                        foreach (var h in headerChildren)
+                        {
+                            var name = h.Properties.Name.ValueOrDefault ?? "";
+                            // Skip the corner "Top Left Header Cell" or similar
+                            if (name.Contains("Top Left") || name.Contains("Header Cell"))
+                                continue;
+                            headers.Add(name);
+                        }
+                        if (headers.Count > 0) return headers;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
         return headers;
     }
 
