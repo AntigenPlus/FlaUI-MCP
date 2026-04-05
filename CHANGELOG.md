@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - WpfTestApp: equivalent WPF controls for cross-framework validation
   - 13 integration tests covering snapshot, click, and text tools
   - Shared test fixture for stable window handles across test runs
+- `windows_wait` tool for polling UI elements until they reach a target state (exists, gone, enabled, focused)
+
+### Fixed
+- `windows_wait` with `state='gone'` enumerates fresh top-level windows to avoid stale desktop cache
 
 ## [0.1.0] - 2024-02-02
 
