@@ -38,7 +38,7 @@ public class SnapshotTool : ToolBase
             maxTableRows = new
             {
                 type = "integer",
-                description = "Maximum number of data rows to include when expanding table/grid elements (default: 5). Headers are always included."
+                description = "Maximum number of items to include when expanding table, grid, or list elements (default: 5). Headers are always included."
             }
         }
     };
@@ -47,9 +47,9 @@ public class SnapshotTool : ToolBase
     {
         var handle = GetStringArgument(arguments, "handle");
         var maxTableRows = 5;
-        if (arguments != null && arguments.Value.TryGetProperty("maxTableRows", out var maxRowsProp))
+        if (arguments != null && arguments.Value.TryGetProperty("maxTableRows", out var maxRowsProp) && maxRowsProp.TryGetInt32(out var val))
         {
-            maxTableRows = maxRowsProp.GetInt32();
+            maxTableRows = Math.Max(0, val);
         }
         var snapshotBuilder = new SnapshotBuilder(_elementRegistry, maxTableRows: maxTableRows);
 
