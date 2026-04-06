@@ -105,6 +105,7 @@ Or using `dotnet run`:
 | `windows_batch` | Execute multiple actions in one call |
 | `windows_press_key` | Send keyboard input (keys and combinations) |
 | `windows_find` | Search for elements by name, automationId, role, or pattern |
+| `windows_table` | Read table/grid data as structured markdown |
 
 ## How It Works
 

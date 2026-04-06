@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Shared test fixture for stable window handles across test runs
 - `windows_press_key` tool for sending keyboard input (individual keys and modifier combinations)
 - `windows_find` tool for targeted element discovery by name, automationId, role, or UIA pattern
+- `windows_table` tool for reading DataGridView and table data as markdown tables
 
 ### Changed
 - `windows_click` now accepts a `method` parameter to choose between mouse click and invoke pattern
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - `windows_find` refreshes window reference to avoid stale cached element properties
+- Column header detection for WinForms DataGridView controls
 
 ## [0.1.0] - 2024-02-02
 
