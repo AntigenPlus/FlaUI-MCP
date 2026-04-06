@@ -39,7 +39,7 @@ public class PressKeyTool : ToolBase
             modifiers = new
             {
                 type = "array",
-                items = new { type = "string", @enum = new[] { "ctrl", "shift", "alt" } },
+                items = new { type = "string", @enum = new[] { "ctrl", "shift", "alt", "win" } },
                 description = "Modifier keys to hold while pressing the key (e.g., [\"ctrl\", \"shift\"])"
             },
             @ref = new
@@ -92,24 +92,28 @@ public class PressKeyTool : ToolBase
                     "ctrl" or "control" => VirtualKeyShort.CONTROL,
                     "shift" => VirtualKeyShort.SHIFT,
                     "alt" => VirtualKeyShort.ALT,
+                    "win" or "windows" or "meta" or "super" => VirtualKeyShort.LWIN,
                     _ => (VirtualKeyShort?)null
                 };
                 if (modKey == null)
                 {
-                    return ErrorResult($"Unknown modifier: '{mod}'. Use 'ctrl', 'shift', or 'alt'.");
+                    return ErrorResult($"Unknown modifier: '{mod}'. Use 'ctrl', 'shift', 'alt', or 'win'.");
                 }
                 modifierKeys.Add(modKey.Value);
             }
 
-            // Press the key with modifiers
+            // Send the key with proper press+release
             if (modifierKeys.Count > 0)
             {
+                // TypeSimultaneously holds modifiers, presses key, releases all
                 var allKeys = modifierKeys.Append(vk.Value).ToArray();
                 Keyboard.TypeSimultaneously(allKeys);
             }
             else
             {
+                // Press + Release ensures the key isn't left in a stuck state
                 Keyboard.Press(vk.Value);
+                Keyboard.Release(vk.Value);
             }
 
             // Build description

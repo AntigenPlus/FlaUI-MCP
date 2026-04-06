@@ -51,7 +51,7 @@ public class PressKeyTests
     public async Task PressKey_UnknownModifier_ReturnsError()
     {
         var tool = new PressKeyTool(_fixture.Elements);
-        var result = await _fixture.CallTool(tool, new { key = "a", modifiers = new[] { "super" } });
+        var result = await _fixture.CallTool(tool, new { key = "a", modifiers = new[] { "hyper" } });
         _output.WriteLine($"Result: {result}");
         Assert.Contains("Unknown modifier", result);
     }
