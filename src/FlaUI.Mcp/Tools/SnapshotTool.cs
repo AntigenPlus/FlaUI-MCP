@@ -93,16 +93,17 @@ public class SnapshotTool : ToolBase
                 handle = _sessionManager.RegisterWindow(window);
             }
 
-            // If UIA2 backend requested, re-find the window using UIA2
+            // If UIA2 backend requested, get the window via its native handle
             if (string.Equals(backend, "uia2", StringComparison.OrdinalIgnoreCase))
             {
-                var uia2 = _sessionManager.UIA2Automation;
-                var uia2Desktop = uia2.GetDesktop();
-                var windowTitle = window.Title;
-                var uia2Window = uia2Desktop.FindFirstDescendant(cf => cf.ByName(windowTitle))?.AsWindow();
-                if (uia2Window != null)
+                var hwnd = window.Properties.NativeWindowHandle.ValueOrDefault;
+                if (hwnd != IntPtr.Zero)
                 {
-                    window = uia2Window;
+                    var uia2Window = _sessionManager.UIA2Automation.FromHandle(hwnd)?.AsWindow();
+                    if (uia2Window != null)
+                    {
+                        window = uia2Window;
+                    }
                 }
             }
 
