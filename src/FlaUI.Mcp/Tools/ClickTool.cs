@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using PlaywrightWindows.Mcp.Core;
 
@@ -98,6 +99,14 @@ public class ClickTool : ToolBase
                 return Task.FromResult(PerformMouseClick(element, elementName, button, doubleClick));
             }
 
+            // Method: auto — for DataGridView checkboxes, use mouse double-click
+            // because UIA Invoke doesn't fire CellContentClick/EndEdit, and a single
+            // mouse click only enters edit mode without toggling the value.
+            if (button == "left" && !doubleClick && IsGridCheckbox(element))
+            {
+                return Task.FromResult(PerformMouseClick(element, elementName, "left", doubleClick: true));
+            }
+
             // Method: auto — try UIA patterns first (for simple left clicks), fall back to mouse
             if (button == "left" && !doubleClick)
             {
@@ -139,6 +148,34 @@ public class ClickTool : ToolBase
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Check if an element is a checkbox/toggle inside a DataGridView (table/grid).
+    /// These require a mouse double-click to toggle because:
+    /// - UIA Invoke doesn't fire CellContentClick or EndEdit
+    /// - A single mouse click only enters edit mode without toggling
+    /// </summary>
+    private static bool IsGridCheckbox(AutomationElement element)
+    {
+        try
+        {
+            var ct = element.Properties.ControlType.ValueOrDefault;
+            if (ct != ControlType.CheckBox && !element.Patterns.Toggle.IsSupported)
+                return false;
+
+            // Walk up to check if an ancestor is a table or grid
+            var parent = element.Parent;
+            for (int i = 0; i < 3 && parent != null; i++)
+            {
+                var parentType = parent.Properties.ControlType.ValueOrDefault;
+                if (parentType == ControlType.Table || parentType == ControlType.DataGrid)
+                    return true;
+                parent = parent.Parent;
+            }
+        }
+        catch { }
+        return false;
     }
 
     private static McpToolResult PerformMouseClick(AutomationElement element, string elementName, string button, bool doubleClick)

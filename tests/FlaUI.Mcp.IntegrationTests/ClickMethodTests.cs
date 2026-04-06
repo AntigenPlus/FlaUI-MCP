@@ -101,4 +101,34 @@ public class ClickMethodTests
 
         Assert.Contains("Clicked", result);
     }
+
+    [Fact]
+    public async Task Click_Auto_GridCheckbox_UsesDoubleClick()
+    {
+        // Navigate to Grid tab
+        var snapshot = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
+        var tabRef = TestAppFixture.FindRefInSnapshot(snapshot, "Grid");
+        Assert.NotNull(tabRef);
+        var clickTool = new ClickTool(_fixture.Elements);
+        await _fixture.CallTool(clickTool, new { @ref = tabRef });
+
+        // Poll for grid checkbox to appear
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string? cbRef = null;
+        while (sw.ElapsedMilliseconds < 5000)
+        {
+            await Task.Delay(100);
+            cbRef = _fixture.FindRefByName(_fixture.WinFormsHandle, "Select Row 0");
+            if (cbRef != null) break;
+        }
+        Assert.NotNull(cbRef);
+
+        // Click with auto method — should use double-click for grid checkbox
+        var tool = new ClickTool(_fixture.Elements);
+        var result = await _fixture.CallTool(tool, new { @ref = cbRef });
+        _output.WriteLine($"Grid checkbox auto click: {result}");
+
+        // Should report "Double-clicked" (not "Invoked") because it's a grid checkbox
+        Assert.Contains("Double-clicked", result);
+    }
 }
