@@ -11,18 +11,16 @@ public class SnapshotTool : ToolBase
 {
     private readonly SessionManager _sessionManager;
     private readonly ElementRegistry _elementRegistry;
-    private readonly SnapshotBuilder _snapshotBuilder;
 
     public SnapshotTool(SessionManager sessionManager, ElementRegistry elementRegistry)
     {
         _sessionManager = sessionManager;
         _elementRegistry = elementRegistry;
-        _snapshotBuilder = new SnapshotBuilder(elementRegistry);
     }
 
     public override string Name => "windows_snapshot";
 
-    public override string Description => 
+    public override string Description =>
         "Capture accessibility snapshot of a window. Returns a structured tree with element refs " +
         "that can be used with windows_click, windows_type, etc. This is the primary tool for " +
         "understanding window contents - use it before interacting with elements.";
@@ -37,6 +35,11 @@ public class SnapshotTool : ToolBase
                 type = "string",
                 description = "Window handle from windows_launch or windows_list_windows. If omitted, uses the most recently launched window."
             },
+            maxTableRows = new
+            {
+                type = "integer",
+                description = "Maximum number of items to include when expanding table, grid, or list elements (default: 5). Headers are always included."
+            },
             backend = new
             {
                 type = "string",
@@ -50,6 +53,12 @@ public class SnapshotTool : ToolBase
     {
         var handle = GetStringArgument(arguments, "handle");
         var backend = GetStringArgument(arguments, "backend");
+        var maxTableRows = 5;
+        if (arguments != null && arguments.Value.TryGetProperty("maxTableRows", out var maxRowsProp) && maxRowsProp.TryGetInt32(out var val))
+        {
+            maxTableRows = Math.Max(0, val);
+        }
+        var snapshotBuilder = new SnapshotBuilder(_elementRegistry, maxTableRows: maxTableRows);
 
         try
         {
@@ -107,7 +116,7 @@ public class SnapshotTool : ToolBase
                 }
             }
 
-            var snapshot = _snapshotBuilder.BuildSnapshot(handle!, window);
+            var snapshot = snapshotBuilder.BuildSnapshot(handle!, window);
             return Task.FromResult(TextResult(snapshot));
         }
         catch (Exception ex)

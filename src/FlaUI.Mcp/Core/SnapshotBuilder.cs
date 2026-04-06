@@ -11,11 +11,13 @@ public class SnapshotBuilder
 {
     private readonly ElementRegistry _elementRegistry;
     private readonly int _maxDepth;
+    private readonly int _maxTableRows;
 
-    public SnapshotBuilder(ElementRegistry elementRegistry, int maxDepth = 10)
+    public SnapshotBuilder(ElementRegistry elementRegistry, int maxDepth = 10, int maxTableRows = 5)
     {
         _elementRegistry = elementRegistry;
         _maxDepth = maxDepth;
+        _maxTableRows = maxTableRows;
     }
 
     public string BuildSnapshot(string windowHandle, AutomationElement root)
@@ -51,9 +53,58 @@ public class SnapshotBuilder
         try
         {
             var children = element.FindAllChildren();
-            foreach (var child in children)
+
+            // For table/grid/list elements, limit the number of data rows/items shown
+            if (role is "table" or "grid" or "list")
             {
-                BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                var itemCount = 0;
+                var totalItems = 0;
+                var foundDataRow = false;
+
+                foreach (var child in children)
+                {
+                    var childRole = GetElementRole(child);
+
+                    // Always include headers and structural elements (scrollbars, etc.)
+                    if (childRole is "header" or "columnheader" or "scrollbar" or "thumb")
+                    {
+                        BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                        continue;
+                    }
+
+                    // Before any data rows are found, check if this element is a header
+                    // container (e.g., DataGridView "Top Row" with column header children).
+                    // Skip this check once data rows are found to avoid expensive
+                    // FindAllChildren calls on every row.
+                    if (!foundDataRow && IsHeaderContainer(child))
+                    {
+                        BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                        continue;
+                    }
+
+                    // Everything else is a data item (row, listitem, or element with row-like content)
+                    foundDataRow = true;
+                    totalItems++;
+                    if (itemCount < _maxTableRows)
+                    {
+                        BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                        itemCount++;
+                    }
+                }
+
+                if (totalItems > _maxTableRows)
+                {
+                    var remaining = totalItems - _maxTableRows;
+                    var childIndent = new string(' ', (depth + 1) * 2);
+                    sb.AppendLine($"{childIndent}... and {remaining} more {(role == "list" ? "items" : "rows")}");
+                }
+            }
+            else
+            {
+                foreach (var child in children)
+                {
+                    BuildElementSnapshot(sb, windowHandle, child, depth + 1);
+                }
             }
         }
         catch
@@ -244,6 +295,29 @@ public class SnapshotBuilder
         }
 
         return false;
+    }
+
+    private static bool IsHeaderContainer(AutomationElement element)
+    {
+        try
+        {
+            var children = element.FindAllChildren();
+            if (children.Length == 0) return false;
+            // A header container has ALL children as headers (e.g., "Top Row" with column headers).
+            // Data rows may have a single row-header child plus data cells, so checking just the
+            // first child is not sufficient.
+            foreach (var child in children)
+            {
+                var childType = child.Properties.ControlType.ValueOrDefault;
+                if (childType != ControlType.Header && childType != ControlType.HeaderItem)
+                    return false;
+            }
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private string EscapeName(string name)

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `windows_click` now accepts a `method` parameter to choose between mouse click and invoke pattern
+- `windows_snapshot` now limits row expansion for table, grid, and list elements to prevent oversized snapshots (configurable via `maxTableRows` parameter, default 5)
 
 ## [0.1.0] - 2024-02-02
 

@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(gh issue:*)",
+      "Bash(git fetch:*)",
+      "Bash(dotnet build:*)",
+      "Bash(git cherry-pick:*)",
+      "Bash(git merge:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(gh api:*)",
+      "Bash(dotnet run:*)",
+      "Bash(ls /c/Users/samalone/AntigenPlus/FlaUI-MCP/test*)",
+      "Bash(ls /c/Users/samalone/AntigenPlus/FlaUI-MCP/tests*)",
+      "Bash(dotnet new:*)",
+      "Bash(dotnet test:*)",
+      "Bash(git stash:*)",
+      "Bash(taskkill //IM notepad.exe //F)",
+      "Bash(gh pr:*)",
+      "Bash(/c/Users/samalone/AntigenPlus/antigen-plus-accessibility/Antigen Plus/bin/Debug/net472/AntigenPlus8.exe:*)",
+      "Bash(dotnet --list-sdks)",
+      "Bash(git rebase:*)",
+      "Bash(GIT_EDITOR=true git rebase --continue)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
