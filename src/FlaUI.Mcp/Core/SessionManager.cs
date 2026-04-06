@@ -129,28 +129,46 @@ public class SessionManager : IDisposable
     public List<(string handle, string title, string? processName)> ListWindows()
     {
         var desktop = _automation.GetDesktop();
-        var windows = desktop.FindAllChildren(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window));
-        
+        var topLevelWindows = desktop.FindAllChildren(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window));
+
         var result = new List<(string, string, string?)>();
-        foreach (var w in windows)
+        foreach (var w in topLevelWindows)
         {
             var window = w.AsWindow();
-            if (window != null && !string.IsNullOrEmpty(window.Title))
+            if (window == null || string.IsNullOrEmpty(window.Title)) continue;
+
+            var handle = RegisterWindow(window);
+            var processName = GetProcessName(window);
+            result.Add((handle, window.Title, processName));
+
+            // Also check for child/owned windows (e.g., modal dialogs shown via ShowDialog)
+            try
             {
-                var handle = RegisterWindow(window);
-                string? processName = null;
-                try 
-                { 
-                    processName = window.Properties.ProcessId.TryGetValue(out var pid) 
-                        ? System.Diagnostics.Process.GetProcessById(pid).ProcessName 
-                        : null; 
+                var childWindows = window.FindAllChildren(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window));
+                foreach (var cw in childWindows)
+                {
+                    var childWindow = cw.AsWindow();
+                    if (childWindow != null && !string.IsNullOrEmpty(childWindow.Title))
+                    {
+                        var childHandle = RegisterWindow(childWindow);
+                        result.Add((childHandle, childWindow.Title, processName));
+                    }
                 }
-                catch { }
-                
-                result.Add((handle, window.Title, processName));
             }
+            catch { }
         }
         return result;
+    }
+
+    private static string? GetProcessName(Window window)
+    {
+        try
+        {
+            return window.Properties.ProcessId.TryGetValue(out var pid)
+                ? System.Diagnostics.Process.GetProcessById(pid).ProcessName
+                : null;
+        }
+        catch { return null; }
     }
 
     public void FocusWindow(string handle)
