@@ -99,12 +99,17 @@ public class ClickTool : ToolBase
                 return Task.FromResult(PerformMouseClick(element, elementName, button, doubleClick));
             }
 
-            // Method: auto — for DataGridView checkboxes, use mouse double-click
-            // because UIA Invoke doesn't fire CellContentClick/EndEdit, and a single
-            // mouse click only enters edit mode without toggling the value.
+            // Method: auto — for DataGridView checkboxes, use two mouse clicks
+            // because UIA Invoke toggles the visual state but doesn't fire
+            // CellContentClick/EndEdit, so the data model isn't updated.
+            // The first mouse click enters edit mode, the second toggles the value.
             if (button == "left" && !doubleClick && IsGridCheckbox(element))
             {
-                return Task.FromResult(PerformMouseClick(element, elementName, "left", doubleClick: true));
+                var clickPoint = element.GetClickablePoint();
+                Mouse.Click(clickPoint, MouseButton.Left);
+                Thread.Sleep(50);
+                Mouse.Click(clickPoint, MouseButton.Left);
+                return Task.FromResult(TextResult($"Clicked {elementName} (grid checkbox)"));
             }
 
             // Method: auto — try UIA patterns first (for simple left clicks), fall back to mouse
