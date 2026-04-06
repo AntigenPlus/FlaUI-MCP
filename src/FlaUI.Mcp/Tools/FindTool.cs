@@ -60,6 +60,11 @@ public class FindTool : ToolBase
                 type = "string",
                 description = "Filter by supported UIA pattern: \"invoke\", \"value\", \"toggle\", \"selection\", \"expandcollapse\", \"scroll\", \"grid\", \"table\", \"text\", \"rangevalue\"",
                 @enum = new[] { "invoke", "value", "toggle", "selection", "expandcollapse", "scroll", "grid", "table", "text", "rangevalue" }
+            },
+            maxResults = new
+            {
+                type = "integer",
+                description = "Maximum number of results to return (default: 50)"
             }
         }
     };
@@ -72,8 +77,10 @@ public class FindTool : ToolBase
         var roleFilter = GetStringArgument(arguments, "role");
         var depthArg = GetArgument<int?>(arguments, "depth");
         var patternFilter = GetStringArgument(arguments, "pattern");
+        var maxResultsArg = GetArgument<int?>(arguments, "maxResults");
 
         int maxDepth = depthArg ?? 10;
+        int maxResults = maxResultsArg ?? 50;
 
         try
         {
@@ -87,15 +94,19 @@ public class FindTool : ToolBase
                     return Task.FromResult(ErrorResult($"Window not found: {handle}"));
                 }
 
-                // Re-find the window from desktop to get fresh element tree
-                // This avoids stale cached properties from a previous snapshot
+                // Get a fresh UIA element via the native window handle to avoid
+                // stale cached properties from a previous snapshot
                 try
                 {
-                    var desktop = _sessionManager.Automation.GetDesktop();
-                    var freshWindow = desktop.FindFirstDescendant(cf => cf.ByName(window.Title))?.AsWindow();
-                    if (freshWindow != null)
+                    var hwnd = window.Properties.NativeWindowHandle.ValueOrDefault;
+                    if (hwnd != IntPtr.Zero)
                     {
-                        window = freshWindow;
+                        var freshElement = _sessionManager.Automation.FromHandle(hwnd);
+                        var freshWindow = freshElement?.AsWindow();
+                        if (freshWindow != null)
+                        {
+                            window = freshWindow;
+                        }
                     }
                 }
                 catch
@@ -137,7 +148,7 @@ public class FindTool : ToolBase
             }
 
             var matches = new List<(AutomationElement Element, string RefId)>();
-            FindMatchingElements(handle!, window, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, 0, maxDepth);
+            FindMatchingElements(handle!, window, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, 0, maxDepth, maxResults);
 
             if (matches.Count == 0)
             {
@@ -145,7 +156,10 @@ public class FindTool : ToolBase
             }
 
             var sb = new StringBuilder();
-            sb.AppendLine($"Found {matches.Count} matching element(s):");
+            var truncated = matches.Count >= maxResults;
+            sb.AppendLine(truncated
+                ? $"Found {matches.Count}+ matching element(s) (limit {maxResults}):"
+                : $"Found {matches.Count} matching element(s):");
             foreach (var (element, refId) in matches)
             {
                 var line = SnapshotBuilder.FormatElementLine(element, refId);
@@ -169,14 +183,17 @@ public class FindTool : ToolBase
         string? roleFilter,
         string? patternFilter,
         int currentDepth,
-        int maxDepth)
+        int maxDepth,
+        int maxResults)
     {
         if (currentDepth > maxDepth) return;
+        if (matches.Count >= maxResults) return;
 
         if (MatchesCriteria(element, nameFilter, automationIdFilter, roleFilter, patternFilter))
         {
             var refId = _elementRegistry.Register(windowHandle, element);
             matches.Add((element, refId));
+            if (matches.Count >= maxResults) return;
         }
 
         // Recurse into children
@@ -185,7 +202,8 @@ public class FindTool : ToolBase
             var children = element.FindAllChildren();
             foreach (var child in children)
             {
-                FindMatchingElements(windowHandle, child, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, currentDepth + 1, maxDepth);
+                FindMatchingElements(windowHandle, child, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, currentDepth + 1, maxDepth, maxResults);
+                if (matches.Count >= maxResults) return;
             }
         }
         catch
