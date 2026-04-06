@@ -5,7 +5,7 @@ using PlaywrightWindows.Mcp.Core;
 namespace PlaywrightWindows.Mcp.Tools;
 
 /// <summary>
-/// Take accessibility snapshot of a window - THE KEY TOOL FOR AGENTS
+/// Take accessibility snapshot of a window or element subtree - THE KEY TOOL FOR AGENTS
 /// </summary>
 public class SnapshotTool : ToolBase
 {
@@ -21,9 +21,10 @@ public class SnapshotTool : ToolBase
     public override string Name => "windows_snapshot";
 
     public override string Description =>
-        "Capture accessibility snapshot of a window. Returns a structured tree with element refs " +
-        "that can be used with windows_click, windows_type, etc. This is the primary tool for " +
-        "understanding window contents - use it before interacting with elements.";
+        "Capture accessibility snapshot of a window or element subtree. Returns a structured tree " +
+        "with element refs that can be used with windows_click, windows_type, etc. This is the " +
+        "primary tool for understanding window contents - use it before interacting with elements. " +
+        "Use 'ref' to snapshot a specific element subtree (e.g., a modal dialog found via windows_find).";
 
     public override object InputSchema => new
     {
@@ -33,7 +34,13 @@ public class SnapshotTool : ToolBase
             handle = new
             {
                 type = "string",
-                description = "Window handle from windows_launch or windows_list_windows. If omitted, uses the most recently launched window."
+                description = "Window handle from windows_launch or windows_list_windows. If omitted, uses the focused window."
+            },
+            @ref = new
+            {
+                type = "string",
+                description = "Element ref to snapshot a subtree instead of the whole window. " +
+                              "Useful for inspecting modal dialogs or specific panels without capturing the entire window."
             },
             maxTableRows = new
             {
@@ -52,6 +59,7 @@ public class SnapshotTool : ToolBase
     public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
         var handle = GetStringArgument(arguments, "handle");
+        var refId = GetStringArgument(arguments, "ref");
         var backend = GetStringArgument(arguments, "backend");
         var maxTableRows = 5;
         if (arguments != null && arguments.Value.TryGetProperty("maxTableRows", out var maxRowsProp) && maxRowsProp.TryGetInt32(out var val))
@@ -62,6 +70,21 @@ public class SnapshotTool : ToolBase
 
         try
         {
+            // If a ref is provided, snapshot that element's subtree
+            if (!string.IsNullOrEmpty(refId))
+            {
+                var element = _elementRegistry.GetElement(refId);
+                if (element == null)
+                {
+                    return Task.FromResult(ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs."));
+                }
+
+                var windowHandle = ExtractWindowHandle(refId) ?? handle ?? "w0";
+                var snapshot = snapshotBuilder.BuildSnapshot(windowHandle, element);
+                return Task.FromResult(TextResult(snapshot));
+            }
+
+            // Otherwise snapshot the whole window
             FlaUI.Core.AutomationElements.Window? window = null;
 
             if (!string.IsNullOrEmpty(handle))
@@ -74,13 +97,11 @@ public class SnapshotTool : ToolBase
             }
             else
             {
-                // Get the foreground window
                 var desktop = _sessionManager.Automation.GetDesktop();
                 var focusedElement = _sessionManager.Automation.FocusedElement();
 
                 if (focusedElement != null)
                 {
-                    // Walk up to find the window
                     var current = focusedElement;
                     while (current != null)
                     {
@@ -98,7 +119,6 @@ public class SnapshotTool : ToolBase
                     return Task.FromResult(ErrorResult("No window specified and no focused window found. Use windows_list_windows to see available windows."));
                 }
 
-                // Register this window
                 handle = _sessionManager.RegisterWindow(window);
             }
 
@@ -116,12 +136,18 @@ public class SnapshotTool : ToolBase
                 }
             }
 
-            var snapshot = snapshotBuilder.BuildSnapshot(handle!, window);
-            return Task.FromResult(TextResult(snapshot));
+            var fullSnapshot = snapshotBuilder.BuildSnapshot(handle!, window);
+            return Task.FromResult(TextResult(fullSnapshot));
         }
         catch (Exception ex)
         {
             return Task.FromResult(ErrorResult($"Failed to capture snapshot: {ex.Message}"));
         }
+    }
+
+    private static string? ExtractWindowHandle(string refId)
+    {
+        var eIndex = refId.IndexOf('e');
+        return eIndex > 0 ? refId[..eIndex] : null;
     }
 }
