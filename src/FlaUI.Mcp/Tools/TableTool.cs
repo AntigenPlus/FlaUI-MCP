@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using PlaywrightWindows.Mcp.Core;
@@ -11,6 +12,8 @@ namespace PlaywrightWindows.Mcp.Tools;
 /// </summary>
 public class TableTool : ToolBase
 {
+    private const int DefaultMaxRows = 100;
+
     private readonly ElementRegistry _elementRegistry;
 
     public TableTool(ElementRegistry elementRegistry)
@@ -37,7 +40,7 @@ public class TableTool : ToolBase
             rows = new
             {
                 type = "string",
-                description = "Row range like '0-9', '0', '5-14'. Default: all rows."
+                description = "Row range like '0-9', '0', '5-14'. Default: first 100 rows."
             },
             columns = new
             {
@@ -75,31 +78,32 @@ public class TableTool : ToolBase
             var rowsParam = GetStringArgument(arguments, "rows");
             var columnsParam = GetStringArgument(arguments, "columns");
 
-            // Check if the table has standard DataItem rows (WPF/modern controls)
-            // or non-standard children (WinForms DataGridView uses Custom type for rows)
-            var hasDataItemRows = false;
-            try
-            {
-                var dataItems = element.FindAllChildren(c => c.ByControlType(ControlType.DataItem));
-                hasDataItemRows = dataItems.Length > 0;
-            }
-            catch { }
+            // Fetch children once and reuse across header detection and row reading
+            var allChildren = element.FindAllChildren();
 
-            // Use Grid pattern only if we have standard DataItem rows
-            if (hasDataItemRows && element.Patterns.Grid.IsSupported)
+            // Detect data rows: standard DataItem or WinForms "Row N" pattern
+            var dataRows = FindDataRows(allChildren);
+            int totalRows = dataRows.Length;
+
+            // Try Grid pattern for standard DataItem rows
+            if (dataRows.Length > 0
+                && dataRows[0].Properties.ControlType.ValueOrDefault == ControlType.DataItem
+                && element.Patterns.Grid.IsSupported)
             {
                 try
                 {
-                    return Task.FromResult(ReadViaGridPattern(element, rowsParam, columnsParam));
+                    return Task.FromResult(ReadViaGridPattern(
+                        element, allChildren, totalRows, rowsParam, columnsParam));
                 }
                 catch
                 {
-                    // Grid pattern may throw even with DataItem rows; fall through
+                    // Grid pattern may throw (e.g., ElementNotAvailableException); fall through
                 }
             }
 
-            // Fall back to generic tree walking that handles non-standard row types
-            return Task.FromResult(ReadViaTreeWalking(element, rowsParam, columnsParam));
+            // Tree walking handles both standard and non-standard row types
+            return Task.FromResult(ReadViaTreeWalking(
+                allChildren, dataRows, rowsParam, columnsParam));
         }
         catch (Exception ex)
         {
@@ -107,273 +111,256 @@ public class TableTool : ToolBase
         }
     }
 
-    private McpToolResult ReadViaGridPattern(AutomationElement element, string? rowsParam, string? columnsParam)
+    private static AutomationElement[] FindDataRows(AutomationElement[] allChildren)
     {
-        var gridPattern = element.Patterns.Grid.Pattern;
-        int totalRows = gridPattern.RowCount;
-        int totalCols = gridPattern.ColumnCount;
-
-        // Read headers from Header children
-        var headers = GetColumnHeaders(element, totalCols);
-
-        // Determine which columns to include
-        var (columnIndices, columnNames) = FilterColumns(headers, columnsParam, totalCols);
-
-        // Parse row range
-        var (startRow, endRow) = ParseRowRange(rowsParam, totalRows);
-
-        // Build markdown table
-        var sb = new StringBuilder();
-
-        // Header row
-        sb.Append('|');
-        foreach (var name in columnNames)
-        {
-            sb.Append($" {EscapePipe(name)} |");
-        }
-        sb.AppendLine();
-
-        // Separator row
-        sb.Append('|');
-        foreach (var _ in columnNames)
-        {
-            sb.Append(" --- |");
-        }
-        sb.AppendLine();
-
-        // Data rows
-        for (int row = startRow; row <= endRow && row < totalRows; row++)
-        {
-            sb.Append('|');
-            foreach (var col in columnIndices)
-            {
-                var cell = gridPattern.GetItem(row, col);
-                var value = GetCellValue(cell);
-                sb.Append($" {EscapePipe(value)} |");
-            }
-            sb.AppendLine();
-        }
-
-        int shownStart = startRow;
-        int shownEnd = Math.Min(endRow, totalRows - 1);
-        sb.AppendLine($"({totalRows} total rows, showing {shownStart}-{shownEnd})");
-
-        return TextResult(sb.ToString());
-    }
-
-    private McpToolResult ReadViaTreeWalking(AutomationElement element, string? rowsParam, string? columnsParam)
-    {
-        // Find data rows — try DataItem first, then fall back to any named "Row N" children
-        var allChildren = element.FindAllChildren();
-        var dataItems = allChildren
+        return allChildren
             .Where(c =>
             {
                 try
                 {
                     var ct = c.Properties.ControlType.ValueOrDefault;
                     if (ct == ControlType.DataItem) return true;
+                    if (ct == ControlType.Header || ct == ControlType.ScrollBar) return false;
                     // WinForms DataGridView uses Custom type with "Row N" names
                     var name = c.Properties.Name.ValueOrDefault ?? "";
-                    return name.StartsWith("Row ") && ct != ControlType.Header
-                        && ct != ControlType.ScrollBar;
+                    return Regex.IsMatch(name, @"^Row \d+$");
                 }
                 catch { return false; }
             })
             .ToArray();
-        int totalRows = dataItems.Length;
+    }
 
-        // Determine column count from the first data row's children (excluding row headers)
-        int totalCols = 0;
-        if (dataItems.Length > 0)
-        {
-            var firstRowChildren = dataItems[0].FindAllChildren();
-            // Exclude row header children (e.g., "Row 0" header in WinForms DataGridView)
-            totalCols = firstRowChildren.Count(c =>
-            {
-                try { return c.Properties.ControlType.ValueOrDefault != ControlType.Header; }
-                catch { return true; }
-            });
-        }
-
-        // Use the shared header detection logic
-        var headers = GetColumnHeaders(element, totalCols);
-
-        // Determine which columns to include
+    private McpToolResult ReadViaGridPattern(
+        AutomationElement element, AutomationElement[] allChildren, int totalRows,
+        string? rowsParam, string? columnsParam)
+    {
+        var gridPattern = element.Patterns.Grid.Pattern;
+        int totalCols = gridPattern.ColumnCount;
+        var headers = GetColumnHeaders(allChildren, totalCols);
         var (columnIndices, columnNames) = FilterColumns(headers, columnsParam, totalCols);
-
-        // Parse row range
         var (startRow, endRow) = ParseRowRange(rowsParam, totalRows);
 
-        // Build markdown table
+        // Build cell accessor for the grid pattern
+        string GetCell(int row, int col)
+        {
+            var cell = gridPattern.GetItem(row, col);
+            return cell != null ? GetCellValue(cell) : "";
+        }
+
+        return BuildMarkdownTable(columnNames, columnIndices, totalRows, startRow, endRow, GetCell);
+    }
+
+    private McpToolResult ReadViaTreeWalking(
+        AutomationElement[] allChildren, AutomationElement[] dataRows,
+        string? rowsParam, string? columnsParam)
+    {
+        int totalRows = dataRows.Length;
+
+        // Determine column count from first data row (excluding row headers)
+        int totalCols = 0;
+        AutomationElement[]? firstRowDataCells = null;
+        if (dataRows.Length > 0)
+        {
+            var firstRowChildren = dataRows[0].FindAllChildren();
+            firstRowDataCells = FilterDataCells(firstRowChildren);
+            totalCols = firstRowDataCells.Length;
+        }
+
+        var headers = GetColumnHeaders(allChildren, totalCols);
+        var (columnIndices, columnNames) = FilterColumns(headers, columnsParam, totalCols);
+        var (startRow, endRow) = ParseRowRange(rowsParam, totalRows);
+
+        // Cache cell arrays per row to avoid redundant FindAllChildren calls
+        // (first row already fetched above)
+        var rowCellCache = new Dictionary<int, AutomationElement[]>();
+        if (firstRowDataCells != null) rowCellCache[0] = firstRowDataCells;
+
+        string GetCell(int row, int col)
+        {
+            if (!rowCellCache.TryGetValue(row, out var cells))
+            {
+                cells = FilterDataCells(dataRows[row].FindAllChildren());
+                rowCellCache[row] = cells;
+            }
+            return col < cells.Length ? GetCellValue(cells[col]) : "";
+        }
+
+        return BuildMarkdownTable(columnNames, columnIndices, totalRows, startRow, endRow, GetCell);
+    }
+
+    /// <summary>
+    /// Filter out row header elements from a row's children, returning only data cells.
+    /// </summary>
+    private static AutomationElement[] FilterDataCells(AutomationElement[] rowChildren)
+    {
+        return rowChildren.Where(c =>
+        {
+            try { return c.Properties.ControlType.ValueOrDefault != ControlType.Header; }
+            catch { return true; }
+        }).ToArray();
+    }
+
+    /// <summary>
+    /// Shared markdown table builder used by both grid pattern and tree walking paths.
+    /// </summary>
+    private McpToolResult BuildMarkdownTable(
+        List<string> columnNames, List<int> columnIndices,
+        int totalRows, int startRow, int endRow,
+        Func<int, int, string> getCell)
+    {
         var sb = new StringBuilder();
 
         // Header row
         sb.Append('|');
         foreach (var name in columnNames)
-        {
             sb.Append($" {EscapePipe(name)} |");
-        }
         sb.AppendLine();
 
         // Separator row
         sb.Append('|');
         foreach (var _ in columnNames)
-        {
             sb.Append(" --- |");
-        }
         sb.AppendLine();
 
         // Data rows
         for (int row = startRow; row <= endRow && row < totalRows; row++)
         {
-            // Get data cells, excluding row header elements
-            var allCells = dataItems[row].FindAllChildren();
-            var dataCells = allCells.Where(c =>
-            {
-                try { return c.Properties.ControlType.ValueOrDefault != ControlType.Header; }
-                catch { return true; }
-            }).ToArray();
-
             sb.Append('|');
             foreach (var col in columnIndices)
-            {
-                var value = col < dataCells.Length ? GetCellValue(dataCells[col]) : "";
-                sb.Append($" {EscapePipe(value)} |");
-            }
+                sb.Append($" {EscapePipe(getCell(row, col))} |");
             sb.AppendLine();
         }
 
-        int shownStart = startRow;
         int shownEnd = Math.Min(endRow, totalRows - 1);
-        sb.AppendLine($"({totalRows} total rows, showing {shownStart}-{shownEnd})");
+        sb.AppendLine($"({totalRows} total rows, showing {startRow}-{shownEnd})");
 
         return TextResult(sb.ToString());
     }
 
-    private List<string> GetColumnHeaders(AutomationElement element, int totalCols)
+    // --- Header detection ---
+
+    private List<string> GetColumnHeaders(AutomationElement[] allChildren, int totalCols)
     {
         List<string> headers;
 
-        // Strategy 1: Find a Header container with HeaderItem children (standard WPF/Win32 tables)
-        headers = TryHeaderContainerWithHeaderItems(element);
+        // Strategy 1: Header container with HeaderItem children (standard WPF/Win32)
+        headers = TryHeaderContainerWithHeaderItems(allChildren);
         if (HasMeaningfulNames(headers))
             return PadHeaders(headers, totalCols);
 
-        // Strategy 2: Find the header row container and extract Header children
-        // (WinForms DataGridView has a "Top Row" element with Header children)
-        headers = TryHeaderRowContainer(element);
+        // Strategy 2: Header row container with Header children (WinForms DataGridView)
+        headers = TryHeaderRowContainer(allChildren);
         if (HasMeaningfulNames(headers))
             return PadHeaders(headers, totalCols);
 
-        // Strategy 3: Find HeaderItem descendants at any depth
-        headers = TryDescendantsByType(element, ControlType.HeaderItem);
+        // Strategy 3: Cell names from first DataItem row (last resort — names may be values)
+        headers = TryCellNamesFromFirstRow(allChildren);
         if (HasMeaningfulNames(headers))
             return PadHeaders(headers, totalCols);
 
-        // Strategy 4: Use cell names from the first DataItem row
-        headers = TryCellNamesFromFirstRow(element);
-        if (HasMeaningfulNames(headers))
-            return PadHeaders(headers, totalCols);
-
-        // Strategy 5: Fall back to generic Column0, Column1, etc.
-        headers = new List<string>();
-        return PadHeaders(headers, totalCols);
+        // Strategy 4: Generic Column0, Column1, etc.
+        return PadHeaders(new List<string>(), totalCols);
     }
 
-    private List<string> TryHeaderContainerWithHeaderItems(AutomationElement element)
+    private static List<string> TryHeaderContainerWithHeaderItems(AutomationElement[] allChildren)
     {
         var headers = new List<string>();
-        var headerElements = element.FindAllChildren(c =>
-            c.ByControlType(ControlType.Header));
-        if (headerElements.Length > 0)
+        foreach (var child in allChildren)
         {
-            var headerItems = headerElements[0].FindAllChildren(c =>
-                c.ByControlType(ControlType.HeaderItem));
-            foreach (var item in headerItems)
+            try
             {
-                headers.Add(item.Properties.Name.ValueOrDefault ?? "");
+                if (child.Properties.ControlType.ValueOrDefault != ControlType.Header)
+                    continue;
+                var headerItems = child.FindAllChildren(c => c.ByControlType(ControlType.HeaderItem));
+                foreach (var item in headerItems)
+                    headers.Add(item.Properties.Name.ValueOrDefault ?? "");
+                if (headers.Count > 0) return headers;
             }
+            catch { }
         }
         return headers;
     }
 
-    private List<string> TryHeaderRowContainer(AutomationElement element)
+    private static List<string> TryHeaderRowContainer(AutomationElement[] allChildren)
     {
-        // Look for a child element whose children are all Headers (the header row container).
-        // Skip the first header in each container if it's a corner cell (e.g., "Top Left Header Cell").
+        // Find a child whose children are mostly Headers (the column header row).
+        // The first such child before any data rows is the header container.
         var headers = new List<string>();
-        try
+        foreach (var child in allChildren)
         {
-            var children = element.FindAllChildren();
-            foreach (var child in children)
+            try
             {
-                try
-                {
-                    var ct = child.Properties.ControlType.ValueOrDefault;
-                    // Skip scrollbars and known non-header containers
-                    if (ct == ControlType.ScrollBar) continue;
+                var ct = child.Properties.ControlType.ValueOrDefault;
+                if (ct == ControlType.ScrollBar) continue;
 
-                    var grandchildren = child.FindAllChildren();
-                    if (grandchildren.Length == 0) continue;
+                // Stop searching once we hit data rows
+                var name = child.Properties.Name.ValueOrDefault ?? "";
+                if (ct == ControlType.DataItem || Regex.IsMatch(name, @"^Row \d+$"))
+                    break;
 
-                    // Check if most children are Headers (the header row)
-                    var headerChildren = grandchildren
-                        .Where(gc =>
-                        {
-                            try { return gc.Properties.ControlType.ValueOrDefault == ControlType.Header; }
-                            catch { return false; }
-                        })
-                        .ToArray();
+                var grandchildren = child.FindAllChildren();
+                if (grandchildren.Length < 2) continue;
 
-                    if (headerChildren.Length >= 2 && headerChildren.Length >= grandchildren.Length / 2)
+                var headerChildren = grandchildren
+                    .Where(gc =>
                     {
-                        // Found the header row — extract names, skip corner cell
-                        foreach (var h in headerChildren)
+                        try { return gc.Properties.ControlType.ValueOrDefault == ControlType.Header; }
+                        catch { return false; }
+                    })
+                    .ToArray();
+
+                if (headerChildren.Length >= 2 && headerChildren.Length >= grandchildren.Length / 2)
+                {
+                    // Skip the corner cell: first header with an empty name or generic name
+                    // that doesn't match subsequent header naming patterns
+                    bool skippedCorner = false;
+                    foreach (var h in headerChildren)
+                    {
+                        var hName = h.Properties.Name.ValueOrDefault ?? "";
+                        if (!skippedCorner && headers.Count == 0 && headerChildren.Length > 2)
                         {
-                            var name = h.Properties.Name.ValueOrDefault ?? "";
-                            // Skip the corner "Top Left Header Cell" or similar
-                            if (name.Contains("Top Left") || name.Contains("Header Cell"))
+                            // If the first header name looks like a corner cell (empty, or
+                            // doesn't match the pattern of subsequent headers), skip it
+                            var nextName = headerChildren.Length > 1
+                                ? headerChildren[1].Properties.Name.ValueOrDefault ?? ""
+                                : "";
+                            if (string.IsNullOrEmpty(hName) || hName.Length > nextName.Length * 3)
+                            {
+                                skippedCorner = true;
                                 continue;
-                            headers.Add(name);
+                            }
                         }
-                        if (headers.Count > 0) return headers;
+                        headers.Add(hName);
                     }
+                    if (headers.Count > 0) return headers;
                 }
-                catch { }
             }
-        }
-        catch { }
-        return headers;
-    }
-
-    private List<string> TryDescendantsByType(AutomationElement element, ControlType controlType)
-    {
-        var headers = new List<string>();
-        var descendants = element.FindAllDescendants(cf => cf.ByControlType(controlType));
-        foreach (var desc in descendants)
-        {
-            var name = desc.Properties.Name.ValueOrDefault ?? "";
-            headers.Add(name);
+            catch { }
         }
         return headers;
     }
 
-    private List<string> TryCellNamesFromFirstRow(AutomationElement element)
+    private static List<string> TryCellNamesFromFirstRow(AutomationElement[] allChildren)
     {
         var headers = new List<string>();
-        var dataItems = element.FindAllChildren(c =>
-            c.ByControlType(ControlType.DataItem));
-        if (dataItems.Length > 0)
+        foreach (var child in allChildren)
         {
-            var cells = dataItems[0].FindAllChildren();
-            foreach (var cell in cells)
+            try
             {
-                var name = cell.Properties.Name.ValueOrDefault ?? "";
-                headers.Add(name);
+                if (child.Properties.ControlType.ValueOrDefault == ControlType.DataItem)
+                {
+                    var cells = child.FindAllChildren();
+                    foreach (var cell in cells)
+                        headers.Add(cell.Properties.Name.ValueOrDefault ?? "");
+                    return headers;
+                }
             }
+            catch { }
         }
         return headers;
     }
+
+    // --- Helpers ---
 
     private static bool HasMeaningfulNames(List<string> headers)
     {
@@ -383,18 +370,16 @@ public class TableTool : ToolBase
     private static List<string> PadHeaders(List<string> headers, int totalCols)
     {
         while (headers.Count < totalCols)
-        {
             headers.Add($"Column{headers.Count}");
-        }
         return headers;
     }
 
-    private (List<int> indices, List<string> names) FilterColumns(List<string> allHeaders, string? columnsParam, int totalCols)
+    private static (List<int> indices, List<string> names) FilterColumns(
+        List<string> allHeaders, string? columnsParam, int totalCols)
     {
         if (string.IsNullOrEmpty(columnsParam))
         {
-            var allIndices = Enumerable.Range(0, totalCols).ToList();
-            return (allIndices, allHeaders.Take(totalCols).ToList());
+            return (Enumerable.Range(0, totalCols).ToList(), allHeaders.Take(totalCols).ToList());
         }
 
         var requestedNames = columnsParam.Split(',').Select(s => s.Trim()).ToList();
@@ -417,50 +402,43 @@ public class TableTool : ToolBase
         return (indices, names);
     }
 
-    private (int start, int end) ParseRowRange(string? rowsParam, int totalRows)
+    private static (int start, int end) ParseRowRange(string? rowsParam, int totalRows)
     {
         if (string.IsNullOrEmpty(rowsParam))
         {
-            return (0, totalRows - 1);
+            return (0, Math.Min(totalRows - 1, DefaultMaxRows - 1));
         }
 
         var parts = rowsParam.Split('-');
-        if (parts.Length == 1)
+        if (parts.Length == 1 && int.TryParse(parts[0].Trim(), out int single))
         {
-            if (int.TryParse(parts[0].Trim(), out int single))
-            {
-                return (single, single);
-            }
+            return (single, single);
         }
-        else if (parts.Length == 2)
+        if (parts.Length == 2
+            && int.TryParse(parts[0].Trim(), out int start)
+            && int.TryParse(parts[1].Trim(), out int end))
         {
-            if (int.TryParse(parts[0].Trim(), out int start) &&
-                int.TryParse(parts[1].Trim(), out int end))
-            {
-                return (start, end);
-            }
+            return (start, end);
         }
 
-        return (0, totalRows - 1);
+        return (0, Math.Min(totalRows - 1, DefaultMaxRows - 1));
     }
 
-    private string GetCellValue(AutomationElement cell)
+    private static string GetCellValue(AutomationElement? cell)
     {
+        if (cell == null) return "";
         try
         {
-            // Try Value pattern
             if (cell.Patterns.Value.IsSupported)
             {
                 var val = cell.Patterns.Value.Pattern.Value.ValueOrDefault;
                 if (!string.IsNullOrEmpty(val)) return val;
             }
-            // Try Toggle pattern for checkbox cells
             if (cell.Patterns.Toggle.IsSupported)
             {
                 var state = cell.Patterns.Toggle.Pattern.ToggleState.ValueOrDefault;
                 return state == ToggleState.On ? "[x]" : "[ ]";
             }
-            // Fall back to Name
             return cell.Properties.Name.ValueOrDefault ?? "";
         }
         catch { return ""; }
