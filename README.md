@@ -104,6 +104,7 @@ Or using `dotnet run`:
 | `windows_close` | Close a window |
 | `windows_batch` | Execute multiple actions in one call |
 | `windows_press_key` | Send keyboard input (keys and combinations) |
+| `windows_find` | Search for elements by name, automationId, role, or pattern |
 
 ## How It Works
 

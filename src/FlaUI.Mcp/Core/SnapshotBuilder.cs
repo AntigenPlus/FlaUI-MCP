@@ -113,7 +113,14 @@ public class SnapshotBuilder
         }
     }
 
-    private string BuildElementLine(AutomationElement element, string refId, string? name, string role)
+    public static string FormatElementLine(AutomationElement element, string refId)
+    {
+        var name = GetElementName(element);
+        var role = GetElementRole(element);
+        return BuildElementLine(element, refId, name, role);
+    }
+
+    private static string BuildElementLine(AutomationElement element, string refId, string? name, string role)
     {
         var parts = new List<string>();
 
@@ -139,7 +146,7 @@ public class SnapshotBuilder
         return string.Join(" ", parts);
     }
 
-    private string GetElementRole(AutomationElement element)
+    public static string GetElementRole(AutomationElement element)
     {
         try
         {
@@ -192,7 +199,7 @@ public class SnapshotBuilder
         }
     }
 
-    private string? GetElementName(AutomationElement element)
+    public static string? GetElementName(AutomationElement element)
     {
         try
         {
@@ -214,7 +221,7 @@ public class SnapshotBuilder
         }
     }
 
-    private List<string> GetStateIndicators(AutomationElement element)
+    public static List<string> GetStateIndicators(AutomationElement element)
     {
         var states = new List<string>();
 
@@ -303,9 +310,6 @@ public class SnapshotBuilder
         {
             var children = element.FindAllChildren();
             if (children.Length == 0) return false;
-            // A header container has ALL children as headers (e.g., "Top Row" with column headers).
-            // Data rows may have a single row-header child plus data cells, so checking just the
-            // first child is not sufficient.
             foreach (var child in children)
             {
                 var childType = child.Properties.ControlType.ValueOrDefault;
@@ -320,7 +324,7 @@ public class SnapshotBuilder
         }
     }
 
-    private string EscapeName(string name)
+    public static string EscapeName(string name)
     {
         return name
             .Replace("\\", "\\\\")
