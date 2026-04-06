@@ -106,6 +106,7 @@ Or using `dotnet run`:
 | `windows_press_key` | Send keyboard input (keys and combinations) |
 | `windows_find` | Search for elements by name, automationId, role, or pattern |
 | `windows_table` | Read table/grid data as structured markdown |
+| `windows_wait` | Wait for an element to reach a target state |
 
 ## How It Works
 
