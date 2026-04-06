@@ -85,7 +85,7 @@ public class GetValueTool : ToolBase
             if (element.Patterns.RangeValue.IsSupported)
             {
                 var rangeValue = element.Patterns.RangeValue.Pattern.Value.ValueOrDefault;
-                return Task.FromResult(TextResult(rangeValue.ToString()));
+                return Task.FromResult(TextResult(rangeValue.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             }
 
             // 5. Fall back to Name property
