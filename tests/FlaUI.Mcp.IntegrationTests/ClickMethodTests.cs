@@ -103,7 +103,7 @@ public class ClickMethodTests
     }
 
     [Fact]
-    public async Task Click_Auto_GridCheckbox_UsesMouseClick()
+    public async Task Click_Auto_GridCheckbox_UsesDoubleClick()
     {
         // Navigate to Grid tab
         var snapshot = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
@@ -123,13 +123,13 @@ public class ClickMethodTests
         }
         Assert.NotNull(cbRef);
 
-        // Click with auto method — should use mouse click (not Invoke) for grid checkbox
+        // Click with auto method — should use double-click for grid checkbox
         var tool = new ClickTool(_fixture.Elements);
         var result = await _fixture.CallTool(tool, new { @ref = cbRef });
         _output.WriteLine($"Grid checkbox auto click: {result}");
 
-        // Should use mouse click path, not UIA Invoke
-        Assert.Contains("grid checkbox", result);
+        // Should use double-click (not Invoke) because it's a grid checkbox
+        Assert.Contains("Double-clicked", result);
         Assert.DoesNotContain("Invoked", result);
     }
 }
