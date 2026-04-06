@@ -74,12 +74,9 @@ public class WaitTool : ToolBase
         var state = GetStringArgument(arguments, "state") ?? "exists";
         var timeout = GetArgument<int?>(arguments, "timeout") ?? 30;
 
-        if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(automationId) && string.IsNullOrEmpty(role))
+        if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(automationId) && string.IsNullOrEmpty(role) && string.IsNullOrEmpty(handle))
         {
-            if (state != "gone" || string.IsNullOrEmpty(handle))
-            {
-                return ErrorResult("At least one search criterion (name, automationId, or role) is required.");
-            }
+            return ErrorResult("At least one search criterion (handle, name, automationId, or role) is required.");
         }
 
         ControlType? roleControlType = null;
@@ -99,40 +96,51 @@ public class WaitTool : ToolBase
         {
             try
             {
-                AutomationElement? searchRoot = null;
+                AutomationElement? found = null;
+                var hasCriteria = !string.IsNullOrEmpty(name) || !string.IsNullOrEmpty(automationId) || roleControlType != null;
 
                 if (!string.IsNullOrEmpty(handle))
                 {
+                    // Searching within a specific window handle
                     var window = _sessionManager.GetWindow(handle);
                     if (window == null)
                     {
                         if (state == "gone")
-                        {
-                            var elapsed = sw.Elapsed.TotalSeconds;
-                            return TextResult($"OK (element gone after {elapsed:F1}s)");
-                        }
+                            return TextResult($"OK (element gone after {sw.Elapsed.TotalSeconds:F1}s)");
                         return ErrorResult($"Window not found: {handle}");
                     }
-                    searchRoot = window;
+
+                    if (hasCriteria)
+                    {
+                        found = SearchDescendants(window, name, automationId, roleControlType);
+                    }
+
+                    // For "gone" with handle + no criteria, check if window is still alive
+                    if (state == "gone" && !hasCriteria)
+                    {
+                        _ = window.Properties.ProcessId.Value;
+                        // If we get here, window is still alive — keep waiting
+                    }
                 }
                 else
                 {
-                    searchRoot = _sessionManager.Automation.GetDesktop();
-                }
+                    // Searching across all windows via desktop.
+                    // Enumerate fresh top-level windows to avoid stale desktop cache.
+                    var desktop = _sessionManager.Automation.GetDesktop();
+                    var topLevelWindows = desktop.FindAllChildren(
+                        cf => cf.ByControlType(ControlType.Window));
 
-                // Search for matching elements
-                AutomationElement? found = null;
-                var hasCriteria = !string.IsNullOrEmpty(name) || !string.IsNullOrEmpty(automationId) || roleControlType != null;
-
-                if (hasCriteria)
-                {
-                    var descendants = searchRoot.FindAllDescendants();
-                    foreach (var element in descendants)
+                    if (hasCriteria)
                     {
-                        if (MatchesElement(element, name, automationId, roleControlType))
+                        foreach (var win in topLevelWindows)
                         {
-                            found = element;
-                            break;
+                            if (MatchesElement(win, name, automationId, roleControlType))
+                            {
+                                found = win;
+                                break;
+                            }
+                            found = SearchDescendants(win, name, automationId, roleControlType);
+                            if (found != null) break;
                         }
                     }
                 }
@@ -141,65 +149,30 @@ public class WaitTool : ToolBase
                 {
                     case "exists":
                         if (found != null)
-                        {
-                            var result = BuildFoundResult(found, handle, sw.Elapsed.TotalSeconds);
-                            return result;
-                        }
+                            return BuildFoundResult(found, handle, sw.Elapsed.TotalSeconds);
                         break;
 
                     case "gone":
-                        if (!hasCriteria && !string.IsNullOrEmpty(handle))
-                        {
-                            // No criteria + handle: check if window still exists
-                            // Window exists (we got past the null check above), keep waiting
-                        }
-                        else if (found == null)
-                        {
-                            var elapsed = sw.Elapsed.TotalSeconds;
-                            return TextResult($"OK (element gone after {elapsed:F1}s)");
-                        }
+                        if (found == null)
+                            return TextResult($"OK (element gone after {sw.Elapsed.TotalSeconds:F1}s)");
                         break;
 
                     case "enabled":
                         if (found != null && found.Properties.IsEnabled.ValueOrDefault)
-                        {
-                            var result = BuildFoundResult(found, handle, sw.Elapsed.TotalSeconds);
-                            return result;
-                        }
+                            return BuildFoundResult(found, handle, sw.Elapsed.TotalSeconds);
                         break;
 
                     case "focused":
-                        if (found != null)
-                        {
-                            try
-                            {
-                                var focusedElement = _sessionManager.Automation.FocusedElement();
-                                if (focusedElement != null &&
-                                    found.Properties.AutomationId.ValueOrDefault == focusedElement.Properties.AutomationId.ValueOrDefault &&
-                                    found.Properties.Name.ValueOrDefault == focusedElement.Properties.Name.ValueOrDefault &&
-                                    found.Properties.ControlType.ValueOrDefault == focusedElement.Properties.ControlType.ValueOrDefault)
-                                {
-                                    var result = BuildFoundResult(found, handle, sw.Elapsed.TotalSeconds);
-                                    return result;
-                                }
-                            }
-                            catch
-                            {
-                                // Focus check can fail during transitions
-                            }
-                        }
+                        if (found != null && found.Properties.HasKeyboardFocus.ValueOrDefault)
+                            return BuildFoundResult(found, handle, sw.Elapsed.TotalSeconds);
                         break;
                 }
             }
             catch
             {
                 // UI elements can go stale or become inaccessible during transitions
-                // For "gone" state, an exception accessing the element means it's gone
                 if (state == "gone")
-                {
-                    var elapsed = sw.Elapsed.TotalSeconds;
-                    return TextResult($"OK (element gone after {elapsed:F1}s)");
-                }
+                    return TextResult($"OK (element gone after {sw.Elapsed.TotalSeconds:F1}s)");
             }
 
             await Task.Delay(250);
@@ -215,7 +188,23 @@ public class WaitTool : ToolBase
         return ErrorResult($"Timeout after {timeout}s waiting for element ({criteriaStr}, state='{state}')");
     }
 
-    private bool MatchesElement(AutomationElement element, string? name, string? automationId, ControlType? roleControlType)
+    private static AutomationElement? SearchDescendants(
+        AutomationElement root, string? name, string? automationId, ControlType? roleControlType)
+    {
+        try
+        {
+            var descendants = root.FindAllDescendants();
+            foreach (var element in descendants)
+            {
+                if (MatchesElement(element, name, automationId, roleControlType))
+                    return element;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static bool MatchesElement(AutomationElement element, string? name, string? automationId, ControlType? roleControlType)
     {
         if (!string.IsNullOrEmpty(name))
         {
