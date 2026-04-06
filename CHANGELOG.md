@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `windows_get_value` tool for reading programmatic element values (Value pattern, Toggle state, SelectionItem, RangeValue)
+- `windows_snapshot` now supports `backend` parameter (`uia3` or `uia2`) for UIA2 fallback on WinForms controls
 - **Integration test framework** with purpose-built WinForms (.NET Framework 4.8.1) and WPF (.NET 8) test applications
   - WinFormsTestApp: buttons, forms, 50-row DataGridView, TreeView, dialog launchers
   - WpfTestApp: equivalent WPF controls for cross-framework validation
