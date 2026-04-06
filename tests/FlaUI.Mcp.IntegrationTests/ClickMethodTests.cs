@@ -128,7 +128,11 @@ public class ClickMethodTests
         var result = await _fixture.CallTool(tool, new { @ref = cbRef });
         _output.WriteLine($"Grid checkbox auto click: {result}");
 
-        // Should use double-click (not Invoke) because it's a grid checkbox
+        // Should use mouse click (not Invoke) because it's a grid checkbox.
+        // The exact click behavior (single vs double) depends on the DataGridView's
+        // commit pattern — some apps use CellContentClick+EndEdit (needs double-click),
+        // others use CurrentCellDirtyStateChanged+CommitEdit (single click suffices).
+        // Auto mode uses double-click as the more universally compatible approach.
         Assert.Contains("Double-clicked", result);
         Assert.DoesNotContain("Invoked", result);
     }
