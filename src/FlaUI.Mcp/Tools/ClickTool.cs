@@ -39,8 +39,8 @@ public class ClickTool : ToolBase
             {
                 type = "string",
                 @enum = new[] { "auto", "invoke", "mouse" },
-                description = "Click method: 'auto' (default, try Invoke/Toggle/Select then mouse), " +
-                              "'invoke' (UIA Invoke pattern only), 'mouse' (physical mouse click only)"
+                description = "Click method: 'auto' (default, try UIA patterns then mouse), " +
+                              "'invoke' (UIA patterns only — Invoke, Toggle, Select), 'mouse' (physical mouse click only)"
             },
             button = new
             {
@@ -79,56 +79,66 @@ public class ClickTool : ToolBase
         {
             var elementName = element.Properties.Name.ValueOrDefault ?? refId;
 
-            // Method: invoke — only use UIA patterns
             if (method == "invoke")
             {
-                if (element.Patterns.Invoke.IsSupported)
+                if (button != "left" || doubleClick)
                 {
-                    element.Patterns.Invoke.Pattern.Invoke();
-                    return Task.FromResult(TextResult($"Invoked {elementName}"));
+                    return Task.FromResult(ErrorResult(
+                        "The 'invoke' method only supports single left clicks. Use method='mouse' for right-click or double-click."));
                 }
-                return Task.FromResult(ErrorResult($"Element {refId} does not support the Invoke pattern. Try method='mouse'."));
+
+                var result = TryUiaPatterns(element, elementName);
+                if (result != null) return Task.FromResult(result);
+                return Task.FromResult(ErrorResult(
+                    $"Element {refId} does not support UIA click patterns (Invoke, Toggle, Select). Try method='mouse'."));
             }
 
-            // Method: mouse — only use physical mouse click
             if (method == "mouse")
             {
                 return Task.FromResult(PerformMouseClick(element, elementName, button, doubleClick));
             }
 
-            // Method: auto — try patterns first, fall back to mouse
+            // Method: auto — try UIA patterns first (for simple left clicks), fall back to mouse
             if (button == "left" && !doubleClick)
             {
-                // Try Invoke pattern (most reliable for buttons)
-                if (element.Patterns.Invoke.IsSupported)
-                {
-                    element.Patterns.Invoke.Pattern.Invoke();
-                    return Task.FromResult(TextResult($"Invoked {elementName}"));
-                }
-
-                // Try Toggle pattern for checkboxes
-                if (element.Patterns.Toggle.IsSupported)
-                {
-                    element.Patterns.Toggle.Pattern.Toggle();
-                    var newState = element.Patterns.Toggle.Pattern.ToggleState.ValueOrDefault;
-                    return Task.FromResult(TextResult($"Toggled {elementName} to {newState}"));
-                }
-
-                // Try SelectionItem pattern for list items
-                if (element.Patterns.SelectionItem.IsSupported)
-                {
-                    element.Patterns.SelectionItem.Pattern.Select();
-                    return Task.FromResult(TextResult($"Selected {elementName}"));
-                }
+                var result = TryUiaPatterns(element, elementName);
+                if (result != null) return Task.FromResult(result);
             }
 
-            // Fall back to mouse click
             return Task.FromResult(PerformMouseClick(element, elementName, button, doubleClick));
         }
         catch (Exception ex)
         {
             return Task.FromResult(ErrorResult($"Failed to click {refId}: {ex.Message}"));
         }
+    }
+
+    /// <summary>
+    /// Try UIA patterns in priority order: Invoke, Toggle, SelectionItem.
+    /// Returns null if no pattern is supported.
+    /// </summary>
+    private static McpToolResult? TryUiaPatterns(AutomationElement element, string elementName)
+    {
+        if (element.Patterns.Invoke.IsSupported)
+        {
+            element.Patterns.Invoke.Pattern.Invoke();
+            return TextResult($"Invoked {elementName}");
+        }
+
+        if (element.Patterns.Toggle.IsSupported)
+        {
+            element.Patterns.Toggle.Pattern.Toggle();
+            var newState = element.Patterns.Toggle.Pattern.ToggleState.ValueOrDefault;
+            return TextResult($"Toggled {elementName} to {newState}");
+        }
+
+        if (element.Patterns.SelectionItem.IsSupported)
+        {
+            element.Patterns.SelectionItem.Pattern.Select();
+            return TextResult($"Selected {elementName}");
+        }
+
+        return null;
     }
 
     private static McpToolResult PerformMouseClick(AutomationElement element, string elementName, string button, bool doubleClick)
