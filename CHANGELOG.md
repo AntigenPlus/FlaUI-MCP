@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Shared test fixture for stable window handles across test runs
 
 ### Changed
-- `windows_snapshot` now limits DataGridView row expansion to prevent oversized snapshots (configurable via `maxTableRows` parameter, default 5)
+- `windows_snapshot` now limits row expansion for table, grid, and list elements to prevent oversized snapshots (configurable via `maxTableRows` parameter, default 5)
 
 ## [0.1.0] - 2024-02-02
 

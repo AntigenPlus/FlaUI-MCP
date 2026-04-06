@@ -59,6 +59,7 @@ public class SnapshotBuilder
             {
                 var itemCount = 0;
                 var totalItems = 0;
+                var foundDataRow = false;
 
                 foreach (var child in children)
                 {
@@ -71,15 +72,18 @@ public class SnapshotBuilder
                         continue;
                     }
 
-                    // Check if this element is a header container (contains header children)
-                    // e.g., DataGridView has an "element" named "Top Row" with header children
-                    if (IsHeaderContainer(child))
+                    // Before any data rows are found, check if this element is a header
+                    // container (e.g., DataGridView "Top Row" with column header children).
+                    // Skip this check once data rows are found to avoid expensive
+                    // FindAllChildren calls on every row.
+                    if (!foundDataRow && IsHeaderContainer(child))
                     {
                         BuildElementSnapshot(sb, windowHandle, child, depth + 1);
                         continue;
                     }
 
                     // Everything else is a data item (row, listitem, or element with row-like content)
+                    foundDataRow = true;
                     totalItems++;
                     if (itemCount < _maxTableRows)
                     {
