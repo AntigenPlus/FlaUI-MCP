@@ -10,6 +10,7 @@ var elementRegistry = new ElementRegistry();
 var toolRegistry = new ToolRegistry();
 toolRegistry.RegisterTool(new LaunchTool(sessionManager));
 toolRegistry.RegisterTool(new SnapshotTool(sessionManager, elementRegistry));
+toolRegistry.RegisterTool(new DumpIdsTool(sessionManager, elementRegistry));
 toolRegistry.RegisterTool(new FindTool(sessionManager, elementRegistry));
 toolRegistry.RegisterTool(new ClickTool(elementRegistry));
 toolRegistry.RegisterTool(new InvokeTool(elementRegistry));

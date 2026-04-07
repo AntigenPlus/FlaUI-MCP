@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `windows_dump_ids` diagnostic tool for discovering stable AutomationIds (#35). Walks descendants of a window or subtree and emits a compact `AutomationId | ControlType | Name | Rect` table. Optional regex filter on AutomationId, optional `includeEmptyIds` to also list controls without an AutomationId. Use this when the regular snapshot is too noisy and you just want a focused list of identifiable controls.
 - `windows_get_value` tool for reading programmatic element values (Value pattern, Toggle state, SelectionItem, RangeValue)
 - `windows_snapshot` now supports `backend` parameter (`uia3` or `uia2`) for UIA2 fallback on WinForms controls
 - **Integration test framework** with purpose-built WinForms (.NET Framework 4.8.1) and WPF (.NET 8) test applications
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `windows_wait` tool for polling UI elements until they reach a target state (exists, gone, enabled, focused)
 
 ### Changed
+- **`windows_snapshot` now annotates each line with the element's AutomationId** when present (#36). The new format is `[ref=<refid>, id=<automationId>]` instead of just `[ref=<refid>]`. AutomationId is the stable identifier test code should target — Name is derived from many sources and can differ between out-of-process UIA (what the MCP sees) and in-process UIA (what test code at runtime sees), so surfacing both lets the agent make an informed choice. The previous fallback that displayed `[automationId]` as a fake Name is removed (it's now redundant with the ref annotation).
 - **`windows_click` and `windows_invoke` are now separate tools** with 1:1 mappings to FlaUI primitives. Previously a single `windows_click` tool fused two incompatible code paths (UIA pattern dispatch and physical mouse click) behind a `method` parameter, which made it hard for callers to know which FlaUI primitive their tool call corresponded to. The split:
   - `windows_click` → physical mouse click. Maps to `Mouse.Click(element.GetClickablePoint(), button)`. Parameters: `ref`, `button`, `doubleClick`, `modifiers`. Brings the target window to the foreground first. Auto-promotes single clicks on WinForms DataGridView checkboxes to double-clicks (a real WinForms quirk — single click only enters edit mode).
   - `windows_invoke` → UIA pattern dispatch. Maps to `element.Patterns.Invoke|Toggle|SelectionItem.Pattern.<action>()`, in priority order. Parameters: `ref` only. Programmatic — no cursor movement, no mouse events, no focus required. Result names which pattern fired (e.g. `UIA Toggle: toggled X to On`).

@@ -179,7 +179,9 @@ public class TestAppFixture : IAsyncLifetime
             if (line.Contains($"\"{name}\"") && line.Contains("[ref="))
             {
                 var refStart = line.IndexOf("[ref=") + 5;
-                var refEnd = line.IndexOf("]", refStart);
+                // The ref annotation is now [ref=<refid>] or [ref=<refid>, id=<automationId>].
+                // Stop at the first comma OR closing bracket so we extract just the refid.
+                var refEnd = line.IndexOfAny(new[] { ',', ']' }, refStart);
                 return line[refStart..refEnd];
             }
         }

@@ -65,6 +65,23 @@ public class SnapshotTests
     }
 
     [Fact]
+    public async Task WinForms_Snapshot_AnnotatesAutomationIds()
+    {
+        // Issue #36: snapshot lines should include the AutomationId in the
+        // ref annotation so test authors can see the stable identifier next
+        // to the unstable Name. WinForms Control.Name maps to AutomationId
+        // automatically, so the test app's "Click Me" button should appear
+        // as "[ref=..., id=ClickMeButton]".
+        await _fixture.NavigateToTabAndFind(_fixture.WinFormsHandle, "Buttons", "Click Me");
+        var snapshot = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
+
+        var clickMeLine = snapshot.Split('\n').FirstOrDefault(l => l.Contains("\"Click Me\""));
+        Assert.NotNull(clickMeLine);
+        _output.WriteLine(clickMeLine);
+        Assert.Contains("id=ClickMeButton", clickMeLine);
+    }
+
+    [Fact]
     public async Task WinForms_Snapshot_ContainsButtons()
     {
         // Navigate to Buttons tab first — another test may have switched tabs

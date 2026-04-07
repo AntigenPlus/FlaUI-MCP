@@ -122,8 +122,9 @@ public class FindTests
         var result = await _fixture.CallTool(tool, new { handle = _fixture.WinFormsHandle, name = "Click Me", role = "button" });
         _output.WriteLine($"Find result: {result}");
 
-        // Extract ref from result
-        var refMatch = System.Text.RegularExpressions.Regex.Match(result, @"\[ref=(\w+)\]");
+        // Extract ref from result. The annotation is [ref=<refid>] or
+        // [ref=<refid>, id=<automationId>] — accept either.
+        var refMatch = System.Text.RegularExpressions.Regex.Match(result, @"\[ref=(\w+)(?:,|\])");
         Assert.True(refMatch.Success, "Should contain a ref");
         var foundRef = refMatch.Groups[1].Value;
         _output.WriteLine($"Extracted ref: {foundRef}");

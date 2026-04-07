@@ -133,8 +133,15 @@ public class SnapshotBuilder
             parts.Add($"\"{EscapeName(name)}\"");
         }
 
-        // Ref
-        parts.Add($"[ref={refId}]");
+        // Ref + AutomationId. AutomationId is the stable identifier test code
+        // should target — Name is derived from many sources and can differ
+        // between out-of-process UIA (what the MCP sees) and in-process UIA
+        // (what test code at runtime sees). Surfacing both lets the agent
+        // make an informed choice about which to put in their FlaUI test (#36).
+        var automationId = TryGetAutomationId(element);
+        parts.Add(string.IsNullOrEmpty(automationId)
+            ? $"[ref={refId}]"
+            : $"[ref={refId}, id={automationId}]");
 
         // State indicators
         var states = GetStateIndicators(element);
@@ -144,6 +151,19 @@ public class SnapshotBuilder
         }
 
         return string.Join(" ", parts);
+    }
+
+    public static string? TryGetAutomationId(AutomationElement element)
+    {
+        try
+        {
+            var id = element.Properties.AutomationId.ValueOrDefault;
+            return string.IsNullOrWhiteSpace(id) ? null : id;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static string GetElementRole(AutomationElement element)
@@ -204,16 +224,10 @@ public class SnapshotBuilder
         try
         {
             var name = element.Properties.Name.ValueOrDefault;
-            if (!string.IsNullOrWhiteSpace(name)) return name;
-
-            // Try automation ID as fallback for identification
-            var automationId = element.Properties.AutomationId.ValueOrDefault;
-            if (!string.IsNullOrWhiteSpace(automationId) && automationId.Length < 50)
-            {
-                return $"[{automationId}]";
-            }
-
-            return null;
+            return string.IsNullOrWhiteSpace(name) ? null : name;
+            // Note: previously this fell back to [automationId] when Name was
+            // empty. The id is now surfaced separately in the ref annotation,
+            // so the fallback would just duplicate it.
         }
         catch
         {
@@ -280,6 +294,11 @@ public class SnapshotBuilder
     {
         // Always include named elements
         if (!string.IsNullOrEmpty(name)) return false;
+
+        // Always include elements with an AutomationId — they're explicitly
+        // named in source code, which means the agent likely cares about them
+        // (test-target candidates).
+        if (!string.IsNullOrEmpty(TryGetAutomationId(element))) return false;
 
         // Always include actionable element types
         if (role is "button" or "textbox" or "checkbox" or "radio" or "combobox" 
