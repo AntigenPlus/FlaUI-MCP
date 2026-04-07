@@ -132,7 +132,24 @@ public class ClickTool : ToolBase
     {
         if (element.Patterns.Invoke.IsSupported)
         {
-            element.Patterns.Invoke.Pattern.Invoke();
+            // Dispatch on a background thread because Invoke() blocks until the
+            // invoked handler returns, which never happens for buttons that open
+            // a modal via ShowDialog — that would deadlock the single MCP worker
+            // thread (#32).
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    element.Patterns.Invoke.Pattern.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    // The tool call already returned, so we can't surface this
+                    // to the caller. Log to stderr (MCP host log) so failures
+                    // are at least observable instead of silently swallowed.
+                    Console.Error.WriteLine($"Background Invoke failed for {elementName}: {ex.Message}");
+                }
+            });
             return TextResult($"Invoked {elementName}");
         }
 

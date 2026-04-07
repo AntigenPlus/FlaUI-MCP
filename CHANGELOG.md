@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `windows_find` refreshes window reference to avoid stale cached element properties
 - Column header detection for WinForms DataGridView controls
 - `windows_wait` with `state='gone'` enumerates fresh top-level windows to avoid stale desktop cache
+- **`windows_click` no longer hangs the MCP worker thread when the target opens a modal dialog** (#32). The Invoke pattern call is now dispatched on a background thread so `windows_click` returns as soon as the click is dispatched, matching how `Mouse.Click()` already behaves. Previously, clicking any button whose handler called `ShowDialog()` would block the single MCP worker thread until the dialog was dismissed, causing every subsequent tool call to time out and forcing the user to kill the application under test.
 
 ## [0.1.0] - 2024-02-02
 
