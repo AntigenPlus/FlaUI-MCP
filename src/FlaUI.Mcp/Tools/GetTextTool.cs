@@ -51,27 +51,30 @@ public class GetTextTool : ToolBase
 
         try
         {
-            string? text = null;
-
-            // Try Value pattern first (for text inputs)
-            if (element.Patterns.Value.IsSupported)
+            return Task.FromResult(UiaRetry.With(() =>
             {
-                text = element.Patterns.Value.Pattern.Value.ValueOrDefault;
-            }
+                string? text = null;
 
-            // Fall back to Name property
-            if (string.IsNullOrEmpty(text))
-            {
-                text = element.Properties.Name.ValueOrDefault;
-            }
+                // Try Value pattern first (for text inputs)
+                if (element.Patterns.Value.IsSupported)
+                {
+                    text = element.Patterns.Value.Pattern.Value.ValueOrDefault;
+                }
 
-            // Try Text pattern
-            if (string.IsNullOrEmpty(text) && element.Patterns.Text.IsSupported)
-            {
-                text = element.Patterns.Text.Pattern.DocumentRange.GetText(-1);
-            }
+                // Fall back to Name property
+                if (string.IsNullOrEmpty(text))
+                {
+                    text = element.Properties.Name.ValueOrDefault;
+                }
 
-            return Task.FromResult(TextResult(text ?? ""));
+                // Try Text pattern
+                if (string.IsNullOrEmpty(text) && element.Patterns.Text.IsSupported)
+                {
+                    text = element.Patterns.Text.Pattern.DocumentRange.GetText(-1);
+                }
+
+                return TextResult(text ?? "");
+            }));
         }
         catch (Exception ex)
         {

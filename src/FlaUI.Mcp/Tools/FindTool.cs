@@ -84,89 +84,92 @@ public class FindTool : ToolBase
 
         try
         {
-            FlaUI.Core.AutomationElements.Window? window = null;
-
-            if (!string.IsNullOrEmpty(handle))
+            return Task.FromResult(UiaRetry.With(() =>
             {
-                window = _sessionManager.GetWindow(handle);
-                if (window == null)
-                {
-                    return Task.FromResult(ErrorResult($"Window not found: {handle}"));
-                }
+                FlaUI.Core.AutomationElements.Window? window = null;
 
-                // Get a fresh UIA element via the native window handle to avoid
-                // stale cached properties from a previous snapshot
-                try
+                if (!string.IsNullOrEmpty(handle))
                 {
-                    var hwnd = window.Properties.NativeWindowHandle.ValueOrDefault;
-                    if (hwnd != IntPtr.Zero)
+                    window = _sessionManager.GetWindow(handle);
+                    if (window == null)
                     {
-                        var freshElement = _sessionManager.Automation.FromHandle(hwnd);
-                        var freshWindow = freshElement?.AsWindow();
-                        if (freshWindow != null)
+                        return ErrorResult($"Window not found: {handle}");
+                    }
+
+                    // Get a fresh UIA element via the native window handle to avoid
+                    // stale cached properties from a previous snapshot
+                    try
+                    {
+                        var hwnd = window.Properties.NativeWindowHandle.ValueOrDefault;
+                        if (hwnd != IntPtr.Zero)
                         {
-                            window = freshWindow;
+                            var freshElement = _sessionManager.Automation.FromHandle(hwnd);
+                            var freshWindow = freshElement?.AsWindow();
+                            if (freshWindow != null)
+                            {
+                                window = freshWindow;
+                            }
                         }
                     }
-                }
-                catch
-                {
-                    // Fall through to use the cached window if refresh fails
-                }
-            }
-            else
-            {
-                // Get the foreground window (same logic as SnapshotTool)
-                var focusedElement = _sessionManager.Automation.FocusedElement();
-
-                if (focusedElement != null)
-                {
-                    var current = focusedElement;
-                    while (current != null)
+                    catch
                     {
-                        if (current.Properties.ControlType.ValueOrDefault == FlaUI.Core.Definitions.ControlType.Window)
-                        {
-                            window = current.AsWindow();
-                            break;
-                        }
-                        current = current.Parent;
+                        // Fall through to use the cached window if refresh fails
                     }
                 }
-
-                if (window == null)
+                else
                 {
-                    return Task.FromResult(ErrorResult("No window specified and no focused window found. Use windows_list_windows to see available windows."));
+                    // Get the foreground window (same logic as SnapshotTool)
+                    var focusedElement = _sessionManager.Automation.FocusedElement();
+
+                    if (focusedElement != null)
+                    {
+                        var current = focusedElement;
+                        while (current != null)
+                        {
+                            if (current.Properties.ControlType.ValueOrDefault == FlaUI.Core.Definitions.ControlType.Window)
+                            {
+                                window = current.AsWindow();
+                                break;
+                            }
+                            current = current.Parent;
+                        }
+                    }
+
+                    if (window == null)
+                    {
+                        return ErrorResult("No window specified and no focused window found. Use windows_list_windows to see available windows.");
+                    }
+
+                    handle = _sessionManager.RegisterWindow(window);
                 }
 
-                handle = _sessionManager.RegisterWindow(window);
-            }
+                // Validate pattern filter if provided
+                if (!string.IsNullOrEmpty(patternFilter) && !IsValidPattern(patternFilter))
+                {
+                    return ErrorResult($"Unknown pattern: {patternFilter}. Valid patterns: invoke, value, toggle, selection, expandcollapse, scroll, grid, table, text, rangevalue");
+                }
 
-            // Validate pattern filter if provided
-            if (!string.IsNullOrEmpty(patternFilter) && !IsValidPattern(patternFilter))
-            {
-                return Task.FromResult(ErrorResult($"Unknown pattern: {patternFilter}. Valid patterns: invoke, value, toggle, selection, expandcollapse, scroll, grid, table, text, rangevalue"));
-            }
+                var matches = new List<(AutomationElement Element, string RefId)>();
+                FindMatchingElements(handle!, window, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, 0, maxDepth, maxResults);
 
-            var matches = new List<(AutomationElement Element, string RefId)>();
-            FindMatchingElements(handle!, window, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, 0, maxDepth, maxResults);
+                if (matches.Count == 0)
+                {
+                    return TextResult("No matching elements found.");
+                }
 
-            if (matches.Count == 0)
-            {
-                return Task.FromResult(TextResult("No matching elements found."));
-            }
+                var sb = new StringBuilder();
+                var truncated = matches.Count >= maxResults;
+                sb.AppendLine(truncated
+                    ? $"Found {matches.Count}+ matching element(s) (limit {maxResults}):"
+                    : $"Found {matches.Count} matching element(s):");
+                foreach (var (element, refId) in matches)
+                {
+                    var line = SnapshotBuilder.FormatElementLine(element, refId);
+                    sb.AppendLine($"- {line}");
+                }
 
-            var sb = new StringBuilder();
-            var truncated = matches.Count >= maxResults;
-            sb.AppendLine(truncated
-                ? $"Found {matches.Count}+ matching element(s) (limit {maxResults}):"
-                : $"Found {matches.Count} matching element(s):");
-            foreach (var (element, refId) in matches)
-            {
-                var line = SnapshotBuilder.FormatElementLine(element, refId);
-                sb.AppendLine($"- {line}");
-            }
-
-            return Task.FromResult(TextResult(sb.ToString()));
+                return TextResult(sb.ToString());
+            }));
         }
         catch (Exception ex)
         {

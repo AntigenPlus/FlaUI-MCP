@@ -96,54 +96,62 @@ public class WaitTool : ToolBase
         {
             try
             {
+                // Wrap the per-iteration UIA work in UiaRetry so a transient
+                // COMException (e.g. WPF DataGrid mid-update) doesn't make us
+                // miss a poll iteration where the element actually exists (#38).
                 AutomationElement? found = null;
                 var hasCriteria = !string.IsNullOrEmpty(name) || !string.IsNullOrEmpty(automationId) || roleControlType != null;
-
-                if (!string.IsNullOrEmpty(handle))
+                var iterationResult = UiaRetry.With<McpToolResult?>(() =>
                 {
-                    // Searching within a specific window handle
-                    var window = _sessionManager.GetWindow(handle);
-                    if (window == null)
+                    found = null;
+                    if (!string.IsNullOrEmpty(handle))
                     {
-                        if (state == "gone")
-                            return TextResult($"OK (element gone after {sw.Elapsed.TotalSeconds:F1}s)");
-                        return ErrorResult($"Window not found: {handle}");
-                    }
-
-                    if (hasCriteria)
-                    {
-                        found = SearchDescendants(window, name, automationId, roleControlType);
-                    }
-
-                    // For "gone" with handle + no criteria, check if window is still alive
-                    if (state == "gone" && !hasCriteria)
-                    {
-                        _ = window.Properties.ProcessId.Value;
-                        // If we get here, window is still alive — keep waiting
-                    }
-                }
-                else
-                {
-                    // Searching across all windows via desktop.
-                    // Enumerate fresh top-level windows to avoid stale desktop cache.
-                    var desktop = _sessionManager.Automation.GetDesktop();
-                    var topLevelWindows = desktop.FindAllChildren(
-                        cf => cf.ByControlType(ControlType.Window));
-
-                    if (hasCriteria)
-                    {
-                        foreach (var win in topLevelWindows)
+                        // Searching within a specific window handle
+                        var window = _sessionManager.GetWindow(handle);
+                        if (window == null)
                         {
-                            if (MatchesElement(win, name, automationId, roleControlType))
-                            {
-                                found = win;
-                                break;
-                            }
-                            found = SearchDescendants(win, name, automationId, roleControlType);
-                            if (found != null) break;
+                            if (state == "gone")
+                                return TextResult($"OK (element gone after {sw.Elapsed.TotalSeconds:F1}s)");
+                            return ErrorResult($"Window not found: {handle}");
+                        }
+
+                        if (hasCriteria)
+                        {
+                            found = SearchDescendants(window, name, automationId, roleControlType);
+                        }
+
+                        // For "gone" with handle + no criteria, check if window is still alive
+                        if (state == "gone" && !hasCriteria)
+                        {
+                            _ = window.Properties.ProcessId.Value;
+                            // If we get here, window is still alive — keep waiting
                         }
                     }
-                }
+                    else
+                    {
+                        // Searching across all windows via desktop.
+                        // Enumerate fresh top-level windows to avoid stale desktop cache.
+                        var desktop = _sessionManager.Automation.GetDesktop();
+                        var topLevelWindows = desktop.FindAllChildren(
+                            cf => cf.ByControlType(ControlType.Window));
+
+                        if (hasCriteria)
+                        {
+                            foreach (var win in topLevelWindows)
+                            {
+                                if (MatchesElement(win, name, automationId, roleControlType))
+                                {
+                                    found = win;
+                                    break;
+                                }
+                                found = SearchDescendants(win, name, automationId, roleControlType);
+                                if (found != null) break;
+                            }
+                        }
+                    }
+                    return null;
+                });
+                if (iterationResult != null) return iterationResult;
 
                 switch (state)
                 {

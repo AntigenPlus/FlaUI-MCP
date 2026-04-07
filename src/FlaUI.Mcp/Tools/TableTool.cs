@@ -67,43 +67,46 @@ public class TableTool : ToolBase
 
         try
         {
-            var controlType = element.Properties.ControlType.ValueOrDefault;
-            if (controlType != ControlType.Table && controlType != ControlType.DataGrid)
+            return Task.FromResult(UiaRetry.With(() =>
             {
-                return Task.FromResult(ErrorResult(
-                    $"Element {refId} is not a table or grid control (found: {controlType}). " +
-                    "Use this tool on Table or DataGrid elements from windows_snapshot."));
-            }
-
-            var rowsParam = GetStringArgument(arguments, "rows");
-            var columnsParam = GetStringArgument(arguments, "columns");
-
-            // Fetch children once and reuse across header detection and row reading
-            var allChildren = element.FindAllChildren();
-
-            // Detect data rows: standard DataItem or WinForms "Row N" pattern
-            var dataRows = FindDataRows(allChildren);
-            int totalRows = dataRows.Length;
-
-            // Try Grid pattern for standard DataItem rows
-            if (dataRows.Length > 0
-                && dataRows[0].Properties.ControlType.ValueOrDefault == ControlType.DataItem
-                && element.Patterns.Grid.IsSupported)
-            {
-                try
+                var controlType = element.Properties.ControlType.ValueOrDefault;
+                if (controlType != ControlType.Table && controlType != ControlType.DataGrid)
                 {
-                    return Task.FromResult(ReadViaGridPattern(
-                        element, allChildren, totalRows, rowsParam, columnsParam));
+                    return ErrorResult(
+                        $"Element {refId} is not a table or grid control (found: {controlType}). " +
+                        "Use this tool on Table or DataGrid elements from windows_snapshot.");
                 }
-                catch
-                {
-                    // Grid pattern may throw (e.g., ElementNotAvailableException); fall through
-                }
-            }
 
-            // Tree walking handles both standard and non-standard row types
-            return Task.FromResult(ReadViaTreeWalking(
-                allChildren, dataRows, rowsParam, columnsParam));
+                var rowsParam = GetStringArgument(arguments, "rows");
+                var columnsParam = GetStringArgument(arguments, "columns");
+
+                // Fetch children once and reuse across header detection and row reading
+                var allChildren = element.FindAllChildren();
+
+                // Detect data rows: standard DataItem or WinForms "Row N" pattern
+                var dataRows = FindDataRows(allChildren);
+                int totalRows = dataRows.Length;
+
+                // Try Grid pattern for standard DataItem rows
+                if (dataRows.Length > 0
+                    && dataRows[0].Properties.ControlType.ValueOrDefault == ControlType.DataItem
+                    && element.Patterns.Grid.IsSupported)
+                {
+                    try
+                    {
+                        return ReadViaGridPattern(
+                            element, allChildren, totalRows, rowsParam, columnsParam);
+                    }
+                    catch
+                    {
+                        // Grid pattern may throw (e.g., ElementNotAvailableException); fall through
+                    }
+                }
+
+                // Tree walking handles both standard and non-standard row types
+                return ReadViaTreeWalking(
+                    allChildren, dataRows, rowsParam, columnsParam);
+            }));
         }
         catch (Exception ex)
         {

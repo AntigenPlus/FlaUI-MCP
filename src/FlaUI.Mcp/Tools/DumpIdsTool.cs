@@ -108,16 +108,19 @@ public class DumpIdsTool : ToolBase
                 return Task.FromResult(ErrorResult("Specify 'handle' or 'ref' to choose what to dump."));
             }
 
-            var rows = new List<Row>();
-            Walk(root, rows, includeEmptyIds, filter);
-
-            if (rows.Count == 0)
+            return Task.FromResult(UiaRetry.With(() =>
             {
-                var what = filter != null ? $"matching /{filterStr}/" : "with AutomationId";
-                return Task.FromResult(TextResult($"No descendants {what} found."));
-            }
+                var rows = new List<Row>();
+                Walk(root, rows, includeEmptyIds, filter);
 
-            return Task.FromResult(TextResult(FormatTable(rows)));
+                if (rows.Count == 0)
+                {
+                    var what = filter != null ? $"matching /{filterStr}/" : "with AutomationId";
+                    return TextResult($"No descendants {what} found.");
+                }
+
+                return TextResult(FormatTable(rows));
+            }));
         }
         catch (Exception ex)
         {

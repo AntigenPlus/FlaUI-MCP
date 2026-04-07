@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **UIA-reading tools now transparently retry transient COMExceptions** (#38). UIA `FindFirst`/`FindAll` against WPF `DataGrid` (and occasionally other virtualized WPF controls) can throw `COMException` with `HResult` `E_UNEXPECTED` (`0x8000FFFF`) while the control updates its UIA tree — the exception looks catastrophic but almost always clears within 100–500ms. `windows_snapshot`, `windows_find`, `windows_list_windows`, `windows_get_text`, `windows_get_value`, `windows_table`, `windows_dump_ids`, and `windows_wait` now wrap their UIA work in a retry helper that catches `E_UNEXPECTED`, `RPC_E_DISCONNECTED` (`0x80010108`), `RPC_E_CALL_REJECTED` (`0x80010001`), and `0x80040201` ("event was unable to invoke any of the subscribers") with a `100ms / 200ms / 400ms` backoff. Total max added latency on the failing path: ~700ms. Zero overhead on the common path. Side-effect tools (`windows_click`, `windows_invoke`, `windows_type`, `windows_fill`, `windows_press_key`) deliberately do not retry — repeating an action could cause it to happen more than once.
+
 ### Documentation
 - README now has a "Pitfalls When Translating MCP Output Into Test Code" section warning that the `Name` UIA property can resolve to different values across the process boundary (out-of-process UIA, what the MCP sees, vs in-process UIA, what a test runner sees) — and recommending `AutomationId` as the stable test target (#37). Includes a concrete WinForms example. `windows_snapshot` tool description carries a short version of the same warning so agents see it without reading the README.
 

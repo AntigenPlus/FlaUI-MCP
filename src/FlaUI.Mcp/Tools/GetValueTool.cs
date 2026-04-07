@@ -53,44 +53,47 @@ public class GetValueTool : ToolBase
 
         try
         {
-            // 1. Value pattern (text inputs, combo boxes, etc.)
-            if (element.Patterns.Value.IsSupported)
+            return Task.FromResult(UiaRetry.With(() =>
             {
-                var value = element.Patterns.Value.Pattern.Value.ValueOrDefault ?? "";
-                return Task.FromResult(TextResult(value));
-            }
-
-            // 2. Toggle pattern (checkboxes, toggle buttons)
-            if (element.Patterns.Toggle.IsSupported)
-            {
-                var toggleState = element.Patterns.Toggle.Pattern.ToggleState.ValueOrDefault;
-                var stateText = toggleState switch
+                // 1. Value pattern (text inputs, combo boxes, etc.)
+                if (element.Patterns.Value.IsSupported)
                 {
-                    ToggleState.On => "checked",
-                    ToggleState.Off => "unchecked",
-                    ToggleState.Indeterminate => "indeterminate",
-                    _ => toggleState.ToString()
-                };
-                return Task.FromResult(TextResult(stateText));
-            }
+                    var value = element.Patterns.Value.Pattern.Value.ValueOrDefault ?? "";
+                    return TextResult(value);
+                }
 
-            // 3. SelectionItem pattern (list items, radio buttons)
-            if (element.Patterns.SelectionItem.IsSupported)
-            {
-                var isSelected = element.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault;
-                return Task.FromResult(TextResult(isSelected ? "selected" : "unselected"));
-            }
+                // 2. Toggle pattern (checkboxes, toggle buttons)
+                if (element.Patterns.Toggle.IsSupported)
+                {
+                    var toggleState = element.Patterns.Toggle.Pattern.ToggleState.ValueOrDefault;
+                    var stateText = toggleState switch
+                    {
+                        ToggleState.On => "checked",
+                        ToggleState.Off => "unchecked",
+                        ToggleState.Indeterminate => "indeterminate",
+                        _ => toggleState.ToString()
+                    };
+                    return TextResult(stateText);
+                }
 
-            // 4. RangeValue pattern (sliders, progress bars, spinners)
-            if (element.Patterns.RangeValue.IsSupported)
-            {
-                var rangeValue = element.Patterns.RangeValue.Pattern.Value.ValueOrDefault;
-                return Task.FromResult(TextResult(rangeValue.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-            }
+                // 3. SelectionItem pattern (list items, radio buttons)
+                if (element.Patterns.SelectionItem.IsSupported)
+                {
+                    var isSelected = element.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault;
+                    return TextResult(isSelected ? "selected" : "unselected");
+                }
 
-            // 5. Fall back to Name property
-            var name = element.Properties.Name.ValueOrDefault ?? "";
-            return Task.FromResult(TextResult(name));
+                // 4. RangeValue pattern (sliders, progress bars, spinners)
+                if (element.Patterns.RangeValue.IsSupported)
+                {
+                    var rangeValue = element.Patterns.RangeValue.Pattern.Value.ValueOrDefault;
+                    return TextResult(rangeValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+
+                // 5. Fall back to Name property
+                var name = element.Properties.Name.ValueOrDefault ?? "";
+                return TextResult(name);
+            }));
         }
         catch (Exception ex)
         {

@@ -74,74 +74,77 @@ public class SnapshotTool : ToolBase
 
         try
         {
-            // If a ref is provided, snapshot that element's subtree
-            if (!string.IsNullOrEmpty(refId))
+            return Task.FromResult(UiaRetry.With(() =>
             {
-                var element = _elementRegistry.GetElement(refId);
-                if (element == null)
+                // If a ref is provided, snapshot that element's subtree
+                if (!string.IsNullOrEmpty(refId))
                 {
-                    return Task.FromResult(ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs."));
-                }
-
-                var windowHandle = ExtractWindowHandle(refId) ?? handle ?? "w0";
-                var snapshot = snapshotBuilder.BuildSnapshot(windowHandle, element);
-                return Task.FromResult(TextResult(snapshot));
-            }
-
-            // Otherwise snapshot the whole window
-            FlaUI.Core.AutomationElements.Window? window = null;
-
-            if (!string.IsNullOrEmpty(handle))
-            {
-                window = _sessionManager.GetWindow(handle);
-                if (window == null)
-                {
-                    return Task.FromResult(ErrorResult($"Window not found: {handle}"));
-                }
-            }
-            else
-            {
-                var desktop = _sessionManager.Automation.GetDesktop();
-                var focusedElement = _sessionManager.Automation.FocusedElement();
-
-                if (focusedElement != null)
-                {
-                    var current = focusedElement;
-                    while (current != null)
+                    var element = _elementRegistry.GetElement(refId);
+                    if (element == null)
                     {
-                        if (current.Properties.ControlType.ValueOrDefault == FlaUI.Core.Definitions.ControlType.Window)
+                        return ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs.");
+                    }
+
+                    var windowHandle = ExtractWindowHandle(refId) ?? handle ?? "w0";
+                    var snapshot = snapshotBuilder.BuildSnapshot(windowHandle, element);
+                    return TextResult(snapshot);
+                }
+
+                // Otherwise snapshot the whole window
+                FlaUI.Core.AutomationElements.Window? window = null;
+
+                if (!string.IsNullOrEmpty(handle))
+                {
+                    window = _sessionManager.GetWindow(handle);
+                    if (window == null)
+                    {
+                        return ErrorResult($"Window not found: {handle}");
+                    }
+                }
+                else
+                {
+                    var desktop = _sessionManager.Automation.GetDesktop();
+                    var focusedElement = _sessionManager.Automation.FocusedElement();
+
+                    if (focusedElement != null)
+                    {
+                        var current = focusedElement;
+                        while (current != null)
                         {
-                            window = current.AsWindow();
-                            break;
+                            if (current.Properties.ControlType.ValueOrDefault == FlaUI.Core.Definitions.ControlType.Window)
+                            {
+                                window = current.AsWindow();
+                                break;
+                            }
+                            current = current.Parent;
                         }
-                        current = current.Parent;
                     }
-                }
 
-                if (window == null)
-                {
-                    return Task.FromResult(ErrorResult("No window specified and no focused window found. Use windows_list_windows to see available windows."));
-                }
-
-                handle = _sessionManager.RegisterWindow(window);
-            }
-
-            // If UIA2 backend requested, get the window via its native handle
-            if (string.Equals(backend, "uia2", StringComparison.OrdinalIgnoreCase))
-            {
-                var hwnd = window.Properties.NativeWindowHandle.ValueOrDefault;
-                if (hwnd != IntPtr.Zero)
-                {
-                    var uia2Window = _sessionManager.UIA2Automation.FromHandle(hwnd)?.AsWindow();
-                    if (uia2Window != null)
+                    if (window == null)
                     {
-                        window = uia2Window;
+                        return ErrorResult("No window specified and no focused window found. Use windows_list_windows to see available windows.");
+                    }
+
+                    handle = _sessionManager.RegisterWindow(window);
+                }
+
+                // If UIA2 backend requested, get the window via its native handle
+                if (string.Equals(backend, "uia2", StringComparison.OrdinalIgnoreCase))
+                {
+                    var hwnd = window.Properties.NativeWindowHandle.ValueOrDefault;
+                    if (hwnd != IntPtr.Zero)
+                    {
+                        var uia2Window = _sessionManager.UIA2Automation.FromHandle(hwnd)?.AsWindow();
+                        if (uia2Window != null)
+                        {
+                            window = uia2Window;
+                        }
                     }
                 }
-            }
 
-            var fullSnapshot = snapshotBuilder.BuildSnapshot(handle!, window);
-            return Task.FromResult(TextResult(fullSnapshot));
+                var fullSnapshot = snapshotBuilder.BuildSnapshot(handle!, window);
+                return TextResult(fullSnapshot);
+            }));
         }
         catch (Exception ex)
         {

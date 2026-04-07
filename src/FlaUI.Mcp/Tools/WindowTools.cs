@@ -31,16 +31,16 @@ public class ListWindowsTool : ToolBase
     {
         try
         {
-            var windows = _sessionManager.ListWindows();
+            var windows = UiaRetry.With(() => _sessionManager.ListWindows());
 
             if (windows.Count == 0)
             {
                 return Task.FromResult(TextResult("No windows found"));
             }
 
-            var lines = windows.Select(w => 
+            var lines = windows.Select(w =>
                 $"- {w.handle}: \"{w.title}\" ({w.processName ?? "unknown"})");
-            
+
             return Task.FromResult(TextResult(string.Join("\n", lines)));
         }
         catch (Exception ex)
