@@ -24,7 +24,11 @@ public class SnapshotTool : ToolBase
         "Capture accessibility snapshot of a window or element subtree. Returns a structured tree " +
         "with element refs that can be used with windows_click, windows_type, etc. This is the " +
         "primary tool for understanding window contents - use it before interacting with elements. " +
-        "Use 'ref' to snapshot a specific element subtree (e.g., a modal dialog found via windows_find).";
+        "Use 'ref' to snapshot a specific element subtree (e.g., a modal dialog found via windows_find). " +
+        "When translating snapshot output into FlaUI test code, prefer the 'id=' (AutomationId) " +
+        "value over the quoted Name — Name can resolve differently across the process boundary " +
+        "between this MCP server (out-of-process UIA) and an in-process test runner. AutomationId " +
+        "is stable. See README \"Pitfalls When Translating MCP Output Into Test Code\".";
 
     public override object InputSchema => new
     {

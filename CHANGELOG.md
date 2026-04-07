@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- README now has a "Pitfalls When Translating MCP Output Into Test Code" section warning that the `Name` UIA property can resolve to different values across the process boundary (out-of-process UIA, what the MCP sees, vs in-process UIA, what a test runner sees) — and recommending `AutomationId` as the stable test target (#37). Includes a concrete WinForms example. `windows_snapshot` tool description carries a short version of the same warning so agents see it without reading the README.
+
 ### Added
 - `windows_dump_ids` diagnostic tool for discovering stable AutomationIds (#35). Walks descendants of a window or subtree and emits a compact `AutomationId | ControlType | Name | Rect` table. Optional regex filter on AutomationId, optional `includeEmptyIds` to also list controls without an AutomationId. Use this when the regular snapshot is too noisy and you just want a focused list of identifiable controls.
 - `windows_get_value` tool for reading programmatic element values (Value pattern, Toggle state, SelectionItem, RangeValue)

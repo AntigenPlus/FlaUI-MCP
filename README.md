@@ -138,6 +138,73 @@ This comes from **Windows UI Automation** - the same API screen readers use. Eac
 
 FlaUI-MCP uses accessibility because it's what screen readers use - it's designed for programmatic UI interaction.
 
+## Pitfalls When Translating MCP Output Into Test Code
+
+A common workflow is to use FlaUI-MCP for exploratory UI analysis and then write FlaUI test code based on what the snapshots showed. There is one trap in this workflow that is worth knowing about up front.
+
+### `Name` is not stable across the process boundary
+
+FlaUI-MCP runs as a separate process from the application under test (AUT). Its UIA3 client walks the AUT's accessibility tree across a process boundary. **A test runner, by contrast, walks the same tree from in-process** — and Windows UIA can return different values for the same `Name` property depending on which vantage point you query from.
+
+The differences are especially pronounced for WinForms and WPF applications, where `Name` is derived from several sources:
+
+- WinForms `AccessibleName`
+- WinForms `Label.Text` inferred from proximity / `LabelFor`
+- WinForms custom `AccessibleObject` overrides
+- WPF `AutomationProperties.Name`
+- WPF `AutomationProperties.LabeledBy`
+- Fallback to `ToString()` for bound view-model items
+
+Out-of-process UIA (the MCP server) reaches these via OLEACC's `IAccessible`-to-UIA bridge. In-process UIA (a test runner inside the AUT) can take a different code path through the AUT's UIA3 provider directly. The two paths sometimes resolve `Name` from different fields inside the same `AccessibleObject`, producing different strings.
+
+**The MCP doesn't transform `Name` at all** — `windows_snapshot` reads `IUIAutomationElement::CurrentName` and prints what it gets. The differences originate in Windows UIA itself and in the AUT's accessibility implementation, not in this server.
+
+#### Concrete example
+
+Exploring a WinForms `Select/Add Patient` dialog via the MCP:
+
+```
+- textbox "Patient ID"   [ref=w4e74, id=txtPatientID]
+- textbox "Short Note"   [ref=w4e77, id=txtShortNote]
+- textbox "First Name"   [ref=w4e84, id=txtFirstName]
+- textbox "Last Name"    [ref=w4e85, id=txtLastName]
+```
+
+The same dialog, queried from in-process UIA inside a test runner:
+
+```
+[0] Name='required',     AutomationId='txtPatientID'
+[1] Name='Phenotype:',   AutomationId='txtShortNote'
+[2] Name='First name:',  AutomationId='txtMiddleName'
+[3] Name='Last name:',   AutomationId='txtFirstName'
+[4] Name='Patient ID:',  AutomationId='txtLastName'
+```
+
+The Names are completely different — and in this particular dialog they're also shifted by one row (a label-proximity inference bug in the AUT itself). A test that uses `ByName("Patient ID")` will work when verified via the MCP and silently fail at runtime with `Assert.IsNotNull failed`.
+
+### How to avoid this
+
+**Identify controls by `AutomationId` rather than `Name` whenever possible.** AutomationId comes directly from `Control.Name` (WinForms) or `AutomationProperties.AutomationId` (WPF) and is stable across the process boundary — both vantage points see the same value.
+
+The MCP makes this easy:
+
+- **`windows_snapshot`** annotates every line with the AutomationId in the ref tag: `[ref=w4e74, id=txtPatientID]`. Use the `id=` value as the test target, not the quoted Name.
+- **`windows_dump_ids`** is a focused diagnostic that lists every control with an AutomationId in a compact `AutomationId | ControlType | Name | Rect` table. Use it when the regular snapshot is too noisy.
+
+In FlaUI test code, prefer:
+
+```csharp
+window.FindFirstDescendant(cf => cf.ByAutomationId("txtPatientID")).AsTextBox();
+```
+
+over:
+
+```csharp
+window.FindFirstDescendant(cf => cf.ByName("Patient ID")).AsTextBox();
+```
+
+If a control you need to target has no AutomationId set in source, **adding one is usually the right fix** — it costs nothing at runtime, makes the control reliably testable, and removes a source of brittleness for both human-written and agent-written tests.
+
 ## Building from Source
 
 ```powershell
