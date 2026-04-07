@@ -75,7 +75,20 @@ public class ClickTool : ToolBase
             // ShowDialog — that would deadlock the single MCP worker thread (#32).
             if (button == "left" && !doubleClick && element.Patterns.Invoke.IsSupported)
             {
-                _ = Task.Run(() => element.Patterns.Invoke.Pattern.Invoke());
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        element.Patterns.Invoke.Pattern.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        // The tool call already returned, so we can't surface this
+                        // to the caller. Log to stderr (MCP host log) so failures
+                        // are at least observable instead of silently swallowed.
+                        Console.Error.WriteLine($"Background Invoke failed for {elementName}: {ex.Message}");
+                    }
+                });
                 return Task.FromResult(TextResult($"Invoked {elementName}"));
             }
 
