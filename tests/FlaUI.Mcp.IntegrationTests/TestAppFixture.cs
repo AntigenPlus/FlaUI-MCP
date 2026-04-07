@@ -143,6 +143,32 @@ public class TestAppFixture : IAsyncLifetime
     }
 
     /// <summary>
+    /// Click the named tab and poll until the expected element appears on it.
+    /// Returns the ref of the expected element. WinForms only renders the
+    /// active tab's content, so callers can't snapshot a tab they haven't
+    /// switched to first.
+    /// </summary>
+    public async Task<string> NavigateToTabAndFind(string windowHandle, string tabName, string elementName)
+    {
+        var tabRef = FindRefByName(windowHandle, tabName);
+        Assert.NotNull(tabRef);
+
+        var clickTool = new ClickTool(Elements);
+        await CallTool(clickTool, new { @ref = tabRef });
+
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 5000)
+        {
+            await Task.Delay(100);
+            var found = FindRefByName(windowHandle, elementName);
+            if (found != null) return found;
+        }
+
+        Assert.Fail($"Element \"{elementName}\" not found after navigating to \"{tabName}\" tab.");
+        return ""; // unreachable
+    }
+
+    /// <summary>
     /// Find an element ref by name in a pre-built snapshot string.
     /// Use this when making multiple lookups against the same snapshot.
     /// </summary>

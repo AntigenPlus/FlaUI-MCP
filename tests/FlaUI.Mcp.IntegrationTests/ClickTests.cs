@@ -102,55 +102,31 @@ public class ClickTests
     [Fact]
     public async Task WinForms_Click_ModalOpeningButton_DoesNotHangWorker()
     {
-        // Regression test for issue #32: clicking a button whose handler calls
-        // ShowDialog() used to block the MCP worker thread for as long as the modal
-        // stayed open, because Patterns.Invoke.Pattern.Invoke() blocks until the
-        // invoked handler returns. The fix dispatches Invoke onto a background
-        // thread and returns immediately.
-
-        // Navigate to the Dialogs tab
-        var snapshot = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
-        var dialogsTabRef = TestAppFixture.FindRefInSnapshot(snapshot, "Dialogs");
-        Assert.NotNull(dialogsTabRef);
+        // Regression test for issue #32: Invoke must not block the MCP worker thread.
+        var modalBtnRef = await _fixture.NavigateToTabAndFind(
+            _fixture.WinFormsHandle, "Dialogs", "Open Modal Dialog");
 
         var clickTool = new ClickTool(_fixture.Elements);
-        await _fixture.CallTool(clickTool, new { @ref = dialogsTabRef });
-        await Task.Delay(200);
-
-        // Find the "Open Modal Dialog" button on the Dialogs tab
-        var modalBtnRef = _fixture.FindRefByName(_fixture.WinFormsHandle, "Open Modal Dialog");
-        Assert.NotNull(modalBtnRef);
-        _output.WriteLine($"Open Modal Dialog ref: {modalBtnRef}");
 
         try
         {
-            // The click call must return promptly even though the WinForms handler
-            // will block on ShowDialog(). Race against a generous timeout — without
-            // the fix, the call hangs until the dialog is dismissed externally.
-            // We measure elapsed time too so a regression manifests as a clear
-            // duration failure rather than just a timeout.
-            var sw = Stopwatch.StartNew();
+            // Race the click against a 2s timeout. Without the fix the WinForms
+            // handler blocks indefinitely on ShowDialog(), so the click would
+            // never return and the timeout branch would win.
             var clickTask = _fixture.CallTool(clickTool, new { @ref = modalBtnRef });
-            var completed = await Task.WhenAny(clickTask, Task.Delay(5000));
-            sw.Stop();
+            var completed = await Task.WhenAny(clickTask, Task.Delay(2000));
             Assert.True(completed == clickTask,
-                "windows_click did not return within 5s — Invoke is still blocking the worker thread (issue #32).");
+                "windows_click did not return within 2s — Invoke is still blocking the worker thread (#32).");
 
             var result = await clickTask;
-            _output.WriteLine($"Click returned in {sw.ElapsedMilliseconds}ms with: {result}");
+            _output.WriteLine($"Click result: {result}");
             Assert.Contains("Invoked", result);
-
-            // Sanity check: should be well under a second when fire-and-forget works.
-            // Without the fix this would hang for the full 5s and fail above.
-            Assert.True(sw.ElapsedMilliseconds < 2000,
-                $"windows_click took {sw.ElapsedMilliseconds}ms; expected near-instant return.");
         }
         finally
         {
-            // Dismiss the modal so subsequent tests find the parent window usable.
-            // The dialog's AcceptButton is OK, so Enter dismisses it. Modal is
-            // focused on open, so a global keyboard press goes to it.
-            await Task.Delay(500); // give the modal time to actually open
+            // Dismiss the modal via its AcceptButton (OK). The modal is focused
+            // on open, so a global Enter press reaches it.
+            await Task.Delay(500);
             FlaUI.Core.Input.Keyboard.Press(FlaUI.Core.WindowsAPI.VirtualKeyShort.ENTER);
             await Task.Delay(500);
         }
