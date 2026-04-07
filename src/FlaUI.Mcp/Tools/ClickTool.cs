@@ -48,12 +48,19 @@ public class ClickTool : ToolBase
         required = new[] { "ref" }
     };
 
-    public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
+    /// <summary>
+    /// How long to wait for UIA Invoke to complete before assuming the
+    /// invoked handler is blocking (e.g. opened a modal) and returning a
+    /// warning to the caller. The Invoke task continues in the background.
+    /// </summary>
+    private const int InvokeBlockingDetectionMs = 500;
+
+    public override async Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
         var refId = GetStringArgument(arguments, "ref");
         if (string.IsNullOrEmpty(refId))
         {
-            return Task.FromResult(ErrorResult("Missing required argument: ref"));
+            return ErrorResult("Missing required argument: ref");
         }
 
         var button = GetStringArgument(arguments, "button") ?? "left";
@@ -62,42 +69,33 @@ public class ClickTool : ToolBase
         var element = _elementRegistry.GetElement(refId);
         if (element == null)
         {
-            return Task.FromResult(ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs."));
+            return ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs.");
         }
 
         try
         {
             var elementName = element.Properties.Name.ValueOrDefault ?? refId;
 
-            // For elements that support Invoke (typically buttons), prefer
-            // Mouse.Click over UIA Invoke. UIA Invoke is a synchronous COM call
-            // that holds an RPC channel against the target process for the entire
-            // duration of the invoked handler. When the handler is slow (e.g. a
-            // button that calls ShowDialog on a form whose Load handler queries
-            // a database), every subsequent UIA call into that process serializes
-            // behind the held channel and times out (issue #32). Mouse.Click is
-            // dispatched via Win32 SendInput, which doesn't hold any COM state.
+            // Try Invoke pattern first (most reliable for buttons).
             //
-            // Falls back to fire-and-forget Invoke when no clickable point is
-            // available (e.g. offscreen elements). The fire-and-forget path
-            // unblocks the MCP worker thread but does NOT prevent the held-COM
-            // hang — agents calling this path should expect subsequent UIA
-            // requests against the same process to be delayed until the invoked
-            // handler returns.
+            // UIA Invoke is a synchronous COM call that holds an RPC channel
+            // against the target process for the entire duration of the
+            // invoked handler. If the handler doesn't return promptly — e.g.
+            // because it called ShowDialog on a modal — the worker thread
+            // would block forever and every subsequent UIA call into that
+            // process would queue behind the held channel (#32).
+            //
+            // To avoid that, we dispatch the Invoke onto a background task
+            // and race it against a short timeout. The common case (fast
+            // handler) returns normally within a few ms. Slow/modal handlers
+            // exceed the timeout — we return success with a WARNING that
+            // explains the held-channel side-effect and points the caller at
+            // the right FlaUI primitive (Mouse.Click(GetClickablePoint())).
+            // The background Invoke is left running; it completes when the
+            // invoked handler eventually returns.
             if (button == "left" && !doubleClick && element.Patterns.Invoke.IsSupported)
             {
-                if (TryGetClickablePoint(element, out var invokeClickPoint))
-                {
-                    // Bring the element's containing window to the foreground so
-                    // Mouse.Click hits it instead of whatever is currently on top.
-                    // Mouse.Click sends to absolute screen coordinates and respects
-                    // Z-order — UIA Invoke didn't, which is part of why we used it.
-                    BringToForeground(element);
-                    Mouse.Click(invokeClickPoint, MouseButton.Left);
-                    return Task.FromResult(TextResult($"Clicked {elementName}"));
-                }
-
-                _ = Task.Run(() =>
+                var invokeTask = Task.Run(() =>
                 {
                     try
                     {
@@ -105,13 +103,29 @@ public class ClickTool : ToolBase
                     }
                     catch (Exception ex)
                     {
-                        // The tool call already returned, so we can't surface this
-                        // to the caller. Log to stderr (MCP host log) so failures
-                        // are at least observable instead of silently swallowed.
+                        // The tool call may have already returned with a
+                        // warning, so we can't surface this to the caller.
+                        // Log to stderr (MCP host log) instead of silently
+                        // swallowing the error.
                         Console.Error.WriteLine($"Background Invoke failed for {elementName}: {ex.Message}");
                     }
                 });
-                return Task.FromResult(TextResult($"Invoked {elementName} (no clickable point — UIA Invoke fallback)"));
+
+                var winner = await Task.WhenAny(invokeTask, Task.Delay(InvokeBlockingDetectionMs));
+                if (winner == invokeTask)
+                {
+                    return TextResult($"Invoked {elementName}");
+                }
+
+                return TextResult(
+                    $"Invoked {elementName}. WARNING: the invoked handler did not return within " +
+                    $"{InvokeBlockingDetectionMs}ms — the target likely opened a modal dialog or is " +
+                    $"doing slow synchronous work. UIA Invoke holds a per-process COM channel for " +
+                    $"the duration of the call, so subsequent UIA tools (windows_snapshot, " +
+                    $"windows_list_windows, windows_get_text, etc.) against this process will time " +
+                    $"out until the handler returns. If you need to interact with the AUT while the " +
+                    $"handler is running, dispatch this click via a physical mouse click instead — " +
+                    $"in FlaUI that's Mouse.Click(element.GetClickablePoint()).");
             }
 
             // Try Toggle pattern for checkboxes
@@ -119,19 +133,19 @@ public class ClickTool : ToolBase
             {
                 element.Patterns.Toggle.Pattern.Toggle();
                 var newState = element.Patterns.Toggle.Pattern.ToggleState.ValueOrDefault;
-                return Task.FromResult(TextResult($"Toggled {elementName} to {newState}"));
+                return TextResult($"Toggled {elementName} to {newState}");
             }
 
             // Try SelectionItem pattern for list items
             if (button == "left" && !doubleClick && element.Patterns.SelectionItem.IsSupported)
             {
                 element.Patterns.SelectionItem.Pattern.Select();
-                return Task.FromResult(TextResult($"Selected {elementName}"));
+                return TextResult($"Selected {elementName}");
             }
 
             // Fall back to mouse click
             var clickPoint = element.GetClickablePoint();
-            
+
             var mouseButton = button switch
             {
                 "right" => MouseButton.Right,
@@ -142,51 +156,17 @@ public class ClickTool : ToolBase
             if (doubleClick)
             {
                 Mouse.DoubleClick(clickPoint, mouseButton);
-                return Task.FromResult(TextResult($"Double-clicked {elementName}"));
+                return TextResult($"Double-clicked {elementName}");
             }
             else
             {
                 Mouse.Click(clickPoint, mouseButton);
-                return Task.FromResult(TextResult($"Clicked {elementName}"));
+                return TextResult($"Clicked {elementName}");
             }
         }
         catch (Exception ex)
         {
-            return Task.FromResult(ErrorResult($"Failed to click {refId}: {ex.Message}"));
-        }
-    }
-
-    private static bool TryGetClickablePoint(FlaUI.Core.AutomationElements.AutomationElement element, out System.Drawing.Point point)
-    {
-        try
-        {
-            point = element.GetClickablePoint();
-            return true;
-        }
-        catch
-        {
-            point = default;
-            return false;
-        }
-    }
-
-    private static void BringToForeground(FlaUI.Core.AutomationElements.AutomationElement element)
-    {
-        try
-        {
-            var current = element;
-            while (current != null
-                && current.Properties.ControlType.ValueOrDefault != FlaUI.Core.Definitions.ControlType.Window)
-            {
-                current = current.Parent;
-            }
-            current?.AsWindow()?.SetForeground();
-        }
-        catch
-        {
-            // Best-effort: if we can't walk parents or set foreground, fall
-            // through to the click anyway. The click may go to the wrong window
-            // but failing here would prevent legitimate clicks on focused windows.
+            return ErrorResult($"Failed to click {refId}: {ex.Message}");
         }
     }
 }

@@ -20,7 +20,7 @@ public class ClickTests
     }
 
     [Fact]
-    public async Task WinForms_Click_Button()
+    public async Task WinForms_Click_Button_Invoke()
     {
         var buttonRef = await _fixture.NavigateToTabAndFind(
             _fixture.WinFormsHandle, "Buttons", "Click Me");
@@ -29,8 +29,7 @@ public class ClickTests
         var tool = new ClickTool(_fixture.Elements);
         var result = await _fixture.CallTool(tool, new { @ref = buttonRef });
         _output.WriteLine($"Result: {result}");
-        Assert.True(result.Contains("Clicked") || result.Contains("Invoked"),
-            $"Expected Clicked or Invoked, got: {result}");
+        Assert.Contains("Invoked", result);
     }
 
     [Fact]
@@ -42,10 +41,9 @@ public class ClickTests
         var tool = new ClickTool(_fixture.Elements);
         var result = await _fixture.CallTool(tool, new { @ref = cbRef });
         _output.WriteLine($"Result: {result}");
-        // WinForms checkboxes support InvokePattern, so ClickTool prefers
-        // Mouse.Click (Invoke fallback returns Invoked/Toggled).
-        Assert.True(result.Contains("Clicked") || result.Contains("Invoked") || result.Contains("Toggled"),
-            $"Expected Clicked, Invoked, or Toggled, got: {result}");
+        // WinForms checkboxes support InvokePattern, so ClickTool uses Invoke (not Toggle)
+        Assert.True(result.Contains("Invoked") || result.Contains("Toggled"),
+            $"Expected Invoked or Toggled, got: {result}");
 
         // Toggle back to original state
         await _fixture.CallTool(tool, new { @ref = cbRef });
@@ -106,41 +104,7 @@ public class ClickTests
     }
 
     [Fact]
-    public async Task WinForms_Click_ModalOpeningButton_DoesNotHangWorker()
-    {
-        // Regression test for issue #32: Invoke must not block the MCP worker thread.
-        var modalBtnRef = await _fixture.NavigateToTabAndFind(
-            _fixture.WinFormsHandle, "Dialogs", "Open Modal Dialog");
-
-        var clickTool = new ClickTool(_fixture.Elements);
-
-        try
-        {
-            // Race the click against a 2s timeout. Without the fix the WinForms
-            // handler blocks indefinitely on ShowDialog(), so the click would
-            // never return and the timeout branch would win.
-            var clickTask = _fixture.CallTool(clickTool, new { @ref = modalBtnRef });
-            var completed = await Task.WhenAny(clickTask, Task.Delay(2000));
-            Assert.True(completed == clickTask,
-                "windows_click did not return within 2s — Invoke is still blocking the worker thread (#32).");
-
-            var result = await clickTask;
-            _output.WriteLine($"Click result: {result}");
-            Assert.True(result.Contains("Clicked") || result.Contains("Invoked"),
-                $"Expected Clicked or Invoked, got: {result}");
-        }
-        finally
-        {
-            // Dismiss the modal via its AcceptButton (OK). The modal is focused
-            // on open, so a global Enter press reaches it.
-            await Task.Delay(500);
-            FlaUI.Core.Input.Keyboard.Press(FlaUI.Core.WindowsAPI.VirtualKeyShort.ENTER);
-            await Task.Delay(500);
-        }
-    }
-
-    [Fact]
-    public async Task Wpf_Click_Button()
+    public async Task Wpf_Click_Button_Invoke()
     {
         var buttonRef = _fixture.FindRefByName(_fixture.WpfHandle, "Click Me");
         Assert.NotNull(buttonRef);
@@ -149,23 +113,23 @@ public class ClickTests
         var tool = new ClickTool(_fixture.Elements);
         var result = await _fixture.CallTool(tool, new { @ref = buttonRef });
         _output.WriteLine($"Result: {result}");
-        Assert.True(result.Contains("Clicked") || result.Contains("Invoked"),
-            $"Expected Clicked or Invoked, got: {result}");
+        Assert.Contains("Invoked", result);
     }
 
     [Fact]
-    public async Task WinForms_Click_ModalOpen_SubsequentUiaCallsSucceed()
+    public async Task WinForms_Click_ModalOpeningButton_ReturnsWarning()
     {
-        // Regression test for issue #32 — the deeper symptom. UIA Invoke is a
-        // synchronous COM call that holds an RPC channel against the target
-        // process for the entire duration of the invoked handler. For a button
-        // that calls ShowDialog, the invoked handler doesn't return until the
-        // modal closes — so even though the modal's message loop is pumping
-        // and would normally serve UIA queries, the held COM channel makes
-        // every subsequent UIA call into that process time out. The fix is
-        // to use Mouse.Click instead of UIA Invoke when a clickable point is
-        // available; mouse input is dispatched via Win32 SendInput and holds
-        // no COM state.
+        // Regression test for issue #32. UIA Invoke is a synchronous COM call
+        // that holds a per-process RPC channel for the duration of the invoked
+        // handler. For a button that opens a modal via ShowDialog, the handler
+        // doesn't return until the modal is dismissed — so subsequent UIA tools
+        // against the AUT would queue behind the held channel and time out.
+        //
+        // The fix dispatches Invoke onto a background task, races it against
+        // a short timeout, and returns a WARNING if it doesn't complete. The
+        // caller is told what happened and which FlaUI primitive to use as a
+        // workaround. The background Invoke is left running and completes when
+        // the modal is dismissed.
         var modalBtnRef = await _fixture.NavigateToTabAndFind(
             _fixture.WinFormsHandle, "Dialogs", "Open Modal Dialog");
 
@@ -173,30 +137,24 @@ public class ClickTests
 
         try
         {
-            var clickResult = await _fixture.CallTool(clickTool, new { @ref = modalBtnRef });
-            _output.WriteLine($"Click result: {clickResult}");
+            // The click call must return promptly even though the WinForms
+            // handler is blocked on ShowDialog().
+            var clickTask = _fixture.CallTool(clickTool, new { @ref = modalBtnRef });
+            var completed = await Task.WhenAny(clickTask, Task.Delay(3000));
+            Assert.True(completed == clickTask,
+                "windows_click did not return within 3s — Invoke is still blocking the worker thread (#32).");
 
-            // Give the modal a moment to open and start pumping its loop.
-            await Task.Delay(300);
-
-            // Snapshot of the parent window while the modal is up. The parent's
-            // UI thread is in the modal loop pumping messages, so UIA queries
-            // must succeed promptly. Race against a 3s timeout — without the
-            // mouse-click fix, this hangs at the UIA layer because the pending
-            // Invoke COM call is holding the per-process RPC channel.
-            var snapshotTask = Task.Run(() => _fixture.TakeSnapshot(_fixture.WinFormsHandle));
-            var winner = await Task.WhenAny(snapshotTask, Task.Delay(3000));
-            Assert.True(winner == snapshotTask,
-                "Snapshot did not return within 3s while modal was open — pending UIA Invoke is holding the COM channel against the AUT process (#32).");
-
-            var snapshot = await snapshotTask;
-            // The snapshot should at least include the parent window's title.
-            Assert.Contains("FlaUI-MCP Test App", snapshot);
+            var result = await clickTask;
+            _output.WriteLine($"Click result: {result}");
+            Assert.Contains("Invoked Open Modal Dialog", result);
+            Assert.Contains("WARNING", result);
+            Assert.Contains("Mouse.Click", result);
         }
         finally
         {
-            // Dismiss the modal via its AcceptButton (OK).
-            await Task.Delay(200);
+            // Dismiss the modal via its AcceptButton (OK). The modal is focused
+            // on open, so a global Enter press reaches it.
+            await Task.Delay(500);
             FlaUI.Core.Input.Keyboard.Press(FlaUI.Core.WindowsAPI.VirtualKeyShort.ENTER);
             await Task.Delay(500);
         }
