@@ -69,12 +69,34 @@ public class ClickTool : ToolBase
         {
             var elementName = element.Properties.Name.ValueOrDefault ?? refId;
 
-            // Try Invoke pattern first (most reliable for buttons). Dispatch on a
-            // background thread because Invoke() blocks until the invoked handler
-            // returns, which never happens for buttons that open a modal via
-            // ShowDialog — that would deadlock the single MCP worker thread (#32).
+            // For elements that support Invoke (typically buttons), prefer
+            // Mouse.Click over UIA Invoke. UIA Invoke is a synchronous COM call
+            // that holds an RPC channel against the target process for the entire
+            // duration of the invoked handler. When the handler is slow (e.g. a
+            // button that calls ShowDialog on a form whose Load handler queries
+            // a database), every subsequent UIA call into that process serializes
+            // behind the held channel and times out (issue #32). Mouse.Click is
+            // dispatched via Win32 SendInput, which doesn't hold any COM state.
+            //
+            // Falls back to fire-and-forget Invoke when no clickable point is
+            // available (e.g. offscreen elements). The fire-and-forget path
+            // unblocks the MCP worker thread but does NOT prevent the held-COM
+            // hang — agents calling this path should expect subsequent UIA
+            // requests against the same process to be delayed until the invoked
+            // handler returns.
             if (button == "left" && !doubleClick && element.Patterns.Invoke.IsSupported)
             {
+                if (TryGetClickablePoint(element, out var invokeClickPoint))
+                {
+                    // Bring the element's containing window to the foreground so
+                    // Mouse.Click hits it instead of whatever is currently on top.
+                    // Mouse.Click sends to absolute screen coordinates and respects
+                    // Z-order — UIA Invoke didn't, which is part of why we used it.
+                    BringToForeground(element);
+                    Mouse.Click(invokeClickPoint, MouseButton.Left);
+                    return Task.FromResult(TextResult($"Clicked {elementName}"));
+                }
+
                 _ = Task.Run(() =>
                 {
                     try
@@ -89,7 +111,7 @@ public class ClickTool : ToolBase
                         Console.Error.WriteLine($"Background Invoke failed for {elementName}: {ex.Message}");
                     }
                 });
-                return Task.FromResult(TextResult($"Invoked {elementName}"));
+                return Task.FromResult(TextResult($"Invoked {elementName} (no clickable point — UIA Invoke fallback)"));
             }
 
             // Try Toggle pattern for checkboxes
@@ -131,6 +153,40 @@ public class ClickTool : ToolBase
         catch (Exception ex)
         {
             return Task.FromResult(ErrorResult($"Failed to click {refId}: {ex.Message}"));
+        }
+    }
+
+    private static bool TryGetClickablePoint(FlaUI.Core.AutomationElements.AutomationElement element, out System.Drawing.Point point)
+    {
+        try
+        {
+            point = element.GetClickablePoint();
+            return true;
+        }
+        catch
+        {
+            point = default;
+            return false;
+        }
+    }
+
+    private static void BringToForeground(FlaUI.Core.AutomationElements.AutomationElement element)
+    {
+        try
+        {
+            var current = element;
+            while (current != null
+                && current.Properties.ControlType.ValueOrDefault != FlaUI.Core.Definitions.ControlType.Window)
+            {
+                current = current.Parent;
+            }
+            current?.AsWindow()?.SetForeground();
+        }
+        catch
+        {
+            // Best-effort: if we can't walk parents or set foreground, fall
+            // through to the click anyway. The click may go to the wrong window
+            // but failing here would prevent legitimate clicks on focused windows.
         }
     }
 }
