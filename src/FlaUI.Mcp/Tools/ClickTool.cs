@@ -69,10 +69,15 @@ public class ClickTool : ToolBase
         {
             var elementName = element.Properties.Name.ValueOrDefault ?? refId;
 
-            // Try Invoke pattern first (most reliable for buttons)
+            // Try Invoke pattern first (most reliable for buttons).
+            // Run on a background thread so the MCP worker thread isn't blocked
+            // when the invoked handler opens a modal dialog via ShowDialog (issue #32).
+            // Invoke errors after dispatch are lost, but in practice Invoke on a
+            // modal-opening button rarely throws.
             if (button == "left" && !doubleClick && element.Patterns.Invoke.IsSupported)
             {
-                element.Patterns.Invoke.Pattern.Invoke();
+                var invokePattern = element.Patterns.Invoke.Pattern;
+                _ = Task.Run(() => invokePattern.Invoke());
                 return Task.FromResult(TextResult($"Invoked {elementName}"));
             }
 
