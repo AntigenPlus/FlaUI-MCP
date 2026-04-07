@@ -18,6 +18,13 @@ public class ClickTool : ToolBase
         _elementRegistry = elementRegistry;
     }
 
+    /// <summary>
+    /// How long to wait for UIA Invoke to complete before assuming the
+    /// invoked handler is blocking (e.g. opened a modal) and returning a
+    /// warning to the caller. The Invoke task continues in the background.
+    /// </summary>
+    private const int InvokeBlockingDetectionMs = 500;
+
     public override string Name => "windows_click";
 
     public override string Description =>
@@ -58,12 +65,12 @@ public class ClickTool : ToolBase
         required = new[] { "ref" }
     };
 
-    public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
+    public override async Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
         var refId = GetStringArgument(arguments, "ref");
         if (string.IsNullOrEmpty(refId))
         {
-            return Task.FromResult(ErrorResult("Missing required argument: ref"));
+            return ErrorResult("Missing required argument: ref");
         }
 
         var method = GetStringArgument(arguments, "method") ?? "auto";
@@ -73,7 +80,7 @@ public class ClickTool : ToolBase
         var element = _elementRegistry.GetElement(refId);
         if (element == null)
         {
-            return Task.FromResult(ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs."));
+            return ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs.");
         }
 
         try
@@ -84,19 +91,19 @@ public class ClickTool : ToolBase
             {
                 if (button != "left" || doubleClick)
                 {
-                    return Task.FromResult(ErrorResult(
-                        "The 'invoke' method only supports single left clicks. Use method='mouse' for right-click or double-click."));
+                    return ErrorResult(
+                        "The 'invoke' method only supports single left clicks. Use method='mouse' for right-click or double-click.");
                 }
 
-                var result = TryUiaPatterns(element, elementName);
-                if (result != null) return Task.FromResult(result);
-                return Task.FromResult(ErrorResult(
-                    $"Element {refId} does not support UIA click patterns (Invoke, Toggle, Select). Try method='mouse'."));
+                var result = await TryUiaPatternsAsync(element, elementName);
+                if (result != null) return result;
+                return ErrorResult(
+                    $"Element {refId} does not support UIA click patterns (Invoke, Toggle, Select). Try method='mouse'.");
             }
 
             if (method == "mouse")
             {
-                return Task.FromResult(PerformMouseClick(element, elementName, button, doubleClick));
+                return PerformMouseClick(element, elementName, button, doubleClick);
             }
 
             // Method: auto — for DataGridView checkboxes, use mouse double-click.
@@ -106,37 +113,43 @@ public class ClickTool : ToolBase
             // in one atomic operation, which correctly fires CellContentClick/EndEdit.
             if (button == "left" && !doubleClick && IsGridCheckbox(element))
             {
-                return Task.FromResult(PerformMouseClick(element, elementName, "left", doubleClick: true));
+                return PerformMouseClick(element, elementName, "left", doubleClick: true);
             }
 
             // Method: auto — try UIA patterns first (for simple left clicks), fall back to mouse
             if (button == "left" && !doubleClick)
             {
-                var result = TryUiaPatterns(element, elementName);
-                if (result != null) return Task.FromResult(result);
+                var result = await TryUiaPatternsAsync(element, elementName);
+                if (result != null) return result;
             }
 
-            return Task.FromResult(PerformMouseClick(element, elementName, button, doubleClick));
+            return PerformMouseClick(element, elementName, button, doubleClick);
         }
         catch (Exception ex)
         {
-            return Task.FromResult(ErrorResult($"Failed to click {refId}: {ex.Message}"));
+            return ErrorResult($"Failed to click {refId}: {ex.Message}");
         }
     }
 
     /// <summary>
     /// Try UIA patterns in priority order: Invoke, Toggle, SelectionItem.
     /// Returns null if no pattern is supported.
+    ///
+    /// The Invoke branch races the call against a short timeout. UIA Invoke
+    /// is a synchronous COM call that holds an RPC channel against the target
+    /// process for the entire duration of the invoked handler. If the handler
+    /// doesn't return promptly (e.g. it called ShowDialog on a modal), every
+    /// subsequent UIA call into that process queues behind the held channel
+    /// and times out (#32). When the timeout fires we return success with a
+    /// warning so the caller knows what happened and which FlaUI primitive
+    /// to switch to. The background Invoke is left running and completes
+    /// when the invoked handler eventually returns.
     /// </summary>
-    private static McpToolResult? TryUiaPatterns(AutomationElement element, string elementName)
+    private static async Task<McpToolResult?> TryUiaPatternsAsync(AutomationElement element, string elementName)
     {
         if (element.Patterns.Invoke.IsSupported)
         {
-            // Dispatch on a background thread because Invoke() blocks until the
-            // invoked handler returns, which never happens for buttons that open
-            // a modal via ShowDialog — that would deadlock the single MCP worker
-            // thread (#32).
-            _ = Task.Run(() =>
+            var invokeTask = Task.Run(() =>
             {
                 try
                 {
@@ -144,13 +157,28 @@ public class ClickTool : ToolBase
                 }
                 catch (Exception ex)
                 {
-                    // The tool call already returned, so we can't surface this
-                    // to the caller. Log to stderr (MCP host log) so failures
-                    // are at least observable instead of silently swallowed.
+                    // The tool call may have already returned with a warning,
+                    // so we can't surface this to the caller. Log to stderr
+                    // (MCP host log) instead of silently swallowing the error.
                     Console.Error.WriteLine($"Background Invoke failed for {elementName}: {ex.Message}");
                 }
             });
-            return TextResult($"Invoked {elementName}");
+
+            var winner = await Task.WhenAny(invokeTask, Task.Delay(InvokeBlockingDetectionMs));
+            if (winner == invokeTask)
+            {
+                return TextResult($"Invoked {elementName}");
+            }
+
+            return TextResult(
+                $"Invoked {elementName}. WARNING: the invoked handler did not return within " +
+                $"{InvokeBlockingDetectionMs}ms — the target likely opened a modal dialog or is " +
+                $"doing slow synchronous work. UIA Invoke holds a per-process COM channel for " +
+                $"the duration of the call, so subsequent UIA tools (windows_snapshot, " +
+                $"windows_list_windows, windows_get_text, etc.) against this process will time " +
+                $"out until the handler returns. If you need to interact with the AUT while the " +
+                $"handler is running, dispatch this click via a physical mouse click instead — " +
+                $"in FlaUI that's Mouse.Click(element.GetClickablePoint()).");
         }
 
         if (element.Patterns.Toggle.IsSupported)
