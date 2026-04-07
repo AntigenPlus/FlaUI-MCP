@@ -21,7 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `windows_wait` tool for polling UI elements until they reach a target state (exists, gone, enabled, focused)
 
 ### Changed
-- `windows_click` now accepts a `method` parameter to choose between mouse click and invoke pattern
+- **`windows_click` and `windows_invoke` are now separate tools** with 1:1 mappings to FlaUI primitives. Previously a single `windows_click` tool fused two incompatible code paths (UIA pattern dispatch and physical mouse click) behind a `method` parameter, which made it hard for callers to know which FlaUI primitive their tool call corresponded to. The split:
+  - `windows_click` → physical mouse click. Maps to `Mouse.Click(element.GetClickablePoint(), button)`. Parameters: `ref`, `button`, `doubleClick`, `modifiers`. Brings the target window to the foreground first. Auto-promotes single clicks on WinForms DataGridView checkboxes to double-clicks (a real WinForms quirk — single click only enters edit mode).
+  - `windows_invoke` → UIA pattern dispatch. Maps to `element.Patterns.Invoke|Toggle|SelectionItem.Pattern.<action>()`, in priority order. Parameters: `ref` only. Programmatic — no cursor movement, no mouse events, no focus required. Result names which pattern fired (e.g. `UIA Toggle: toggled X to On`).
+  - The `method` parameter on `windows_click` is removed.
+- `windows_click` now accepts a `modifiers` array parameter (`ctrl`, `shift`, `alt`, `win`) to hold keys during the click — enables Ctrl-click multi-select and Shift-click range-select in grids/lists (#34).
 - `windows_snapshot` now limits row expansion for table, grid, and list elements to prevent oversized snapshots (configurable via `maxTableRows` parameter, default 5)
 
 ### Fixed

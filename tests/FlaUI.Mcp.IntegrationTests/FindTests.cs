@@ -132,7 +132,7 @@ public class FindTests
         var clickTool = new ClickTool(_fixture.Elements);
         var clickResult = await _fixture.CallTool(clickTool, new { @ref = foundRef });
         _output.WriteLine($"Click result: {clickResult}");
-        Assert.Contains("Invoked", clickResult);
+        Assert.Contains("Clicked", clickResult);
     }
 
     [Fact]

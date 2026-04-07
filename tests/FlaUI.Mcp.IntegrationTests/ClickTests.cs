@@ -5,7 +5,8 @@ using Xunit.Abstractions;
 namespace FlaUI.Mcp.IntegrationTests;
 
 /// <summary>
-/// Tests for windows_click tool using the test apps.
+/// Tests for windows_click — physical mouse click via Mouse.Click. See
+/// InvokeTests for the windows_invoke (UIA pattern dispatch) counterpart.
 /// </summary>
 [Collection("TestApps")]
 public class ClickTests
@@ -20,7 +21,7 @@ public class ClickTests
     }
 
     [Fact]
-    public async Task WinForms_Click_Button_Invoke()
+    public async Task WinForms_Click_Button_DispatchesMouseClick()
     {
         var buttonRef = await _fixture.NavigateToTabAndFind(
             _fixture.WinFormsHandle, "Buttons", "Click Me");
@@ -29,11 +30,54 @@ public class ClickTests
         var tool = new ClickTool(_fixture.Elements);
         var result = await _fixture.CallTool(tool, new { @ref = buttonRef });
         _output.WriteLine($"Result: {result}");
-        Assert.Contains("Invoked", result);
+        Assert.Contains("Clicked", result);
     }
 
     [Fact]
-    public async Task WinForms_Click_Checkbox_Toggle()
+    public async Task Wpf_Click_Button_DispatchesMouseClick()
+    {
+        var buttonRef = await _fixture.NavigateToTabAndFind(
+            _fixture.WpfHandle, "Buttons", "Click Me");
+        _output.WriteLine($"Click Me button ref: {buttonRef}");
+
+        var tool = new ClickTool(_fixture.Elements);
+        var result = await _fixture.CallTool(tool, new { @ref = buttonRef });
+        _output.WriteLine($"Result: {result}");
+        Assert.Contains("Clicked", result);
+    }
+
+    [Fact]
+    public async Task WinForms_Click_GridCheckbox_AutoDoubleClicks()
+    {
+        // WinForms DataGridView checkboxes need a mouse double-click to fire
+        // CellContentClick + EndEdit (so the underlying data model updates).
+        // ClickTool detects grid checkboxes via IsGridCheckbox and auto-promotes
+        // the single click to a double-click. Verify the result message reflects
+        // that promotion.
+        var snapshot = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
+        var tabRef = TestAppFixture.FindRefInSnapshot(snapshot, "Grid");
+        Assert.NotNull(tabRef);
+        var clickTool = new ClickTool(_fixture.Elements);
+        await _fixture.CallTool(clickTool, new { @ref = tabRef });
+
+        // Poll for grid checkbox to appear
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string? cbRef = null;
+        while (sw.ElapsedMilliseconds < 5000)
+        {
+            await Task.Delay(100);
+            cbRef = _fixture.FindRefByName(_fixture.WinFormsHandle, "Select Row 0");
+            if (cbRef != null) break;
+        }
+        Assert.NotNull(cbRef);
+
+        var result = await _fixture.CallTool(clickTool, new { @ref = cbRef });
+        _output.WriteLine($"Grid checkbox click: {result}");
+        Assert.Contains("Double-clicked", result);
+    }
+
+    [Fact]
+    public async Task WinForms_Click_Checkbox_TogglesIt()
     {
         var cbRef = await _fixture.NavigateToTabAndFind(
             _fixture.WinFormsHandle, "Buttons", "Enable the button below");
@@ -41,9 +85,7 @@ public class ClickTests
         var tool = new ClickTool(_fixture.Elements);
         var result = await _fixture.CallTool(tool, new { @ref = cbRef });
         _output.WriteLine($"Result: {result}");
-        // WinForms checkboxes support InvokePattern, so ClickTool uses Invoke (not Toggle)
-        Assert.True(result.Contains("Invoked") || result.Contains("Toggled"),
-            $"Expected Invoked or Toggled, got: {result}");
+        Assert.Contains("Clicked", result);
 
         // Toggle back to original state
         await _fixture.CallTool(tool, new { @ref = cbRef });
@@ -104,59 +146,61 @@ public class ClickTests
     }
 
     [Fact]
-    public async Task Wpf_Click_Button_Invoke()
+    public async Task WinForms_Click_WithCtrlModifier_HoldsKeyDuringClick()
     {
-        var buttonRef = _fixture.FindRefByName(_fixture.WpfHandle, "Click Me");
-        Assert.NotNull(buttonRef);
-        _output.WriteLine($"Click Me button ref: {buttonRef}");
-
-        var tool = new ClickTool(_fixture.Elements);
-        var result = await _fixture.CallTool(tool, new { @ref = buttonRef });
-        _output.WriteLine($"Result: {result}");
-        Assert.Contains("Invoked", result);
-    }
-
-    [Fact]
-    public async Task WinForms_Click_ModalOpeningButton_ReturnsWarning()
-    {
-        // Regression test for issue #32. UIA Invoke is a synchronous COM call
-        // that holds a per-process RPC channel for the duration of the invoked
-        // handler. For a button that opens a modal via ShowDialog, the handler
-        // doesn't return until the modal is dismissed — so subsequent UIA tools
-        // against the AUT would queue behind the held channel and time out.
-        //
-        // The fix dispatches Invoke onto a background task, races it against
-        // a short timeout, and returns a WARNING if it doesn't complete. The
-        // caller is told what happened and which FlaUI primitive to use as a
-        // workaround. The background Invoke is left running and completes when
-        // the modal is dismissed.
-        var modalBtnRef = await _fixture.NavigateToTabAndFind(
-            _fixture.WinFormsHandle, "Dialogs", "Open Modal Dialog");
+        // Issue #34: windows_click must support modifier keys so agents can
+        // drive Ctrl-click multi-select in grids/lists. The test app's
+        // Modifier Test Button captures Control.ModifierKeys when its Click
+        // handler fires and writes the result into a label.
+        await _fixture.NavigateToTabAndFind(
+            _fixture.WinFormsHandle, "Buttons", "Modifier Test Button");
 
         var clickTool = new ClickTool(_fixture.Elements);
 
-        try
-        {
-            // The click call must return promptly even though the WinForms
-            // handler is blocked on ShowDialog().
-            var clickTask = _fixture.CallTool(clickTool, new { @ref = modalBtnRef });
-            var completed = await Task.WhenAny(clickTask, Task.Delay(3000));
-            Assert.True(completed == clickTask,
-                "windows_click did not return within 3s — Invoke is still blocking the worker thread (#32).");
+        // Baseline: click with no modifier — label should read "None".
+        var btnRef = _fixture.FindRefByName(_fixture.WinFormsHandle, "Modifier Test Button");
+        Assert.NotNull(btnRef);
+        await _fixture.CallTool(clickTool, new { @ref = btnRef });
+        await Task.Delay(100);
 
-            var result = await clickTask;
-            _output.WriteLine($"Click result: {result}");
-            Assert.Contains("Invoked Open Modal Dialog", result);
-            Assert.Contains("WARNING", result);
-            Assert.Contains("Mouse.Click", result);
-        }
-        finally
+        var snapshotAfterPlain = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
+        var plainLine = snapshotAfterPlain.Split('\n').FirstOrDefault(l => l.Contains("Last click modifiers"));
+        _output.WriteLine($"After plain click: {plainLine}");
+        Assert.NotNull(plainLine);
+        Assert.Contains("None", plainLine);
+
+        // Ctrl+click: label should reflect Control.
+        var btnRef2 = _fixture.FindRefByName(_fixture.WinFormsHandle, "Modifier Test Button");
+        Assert.NotNull(btnRef2);
+        var result = await _fixture.CallTool(clickTool, new
         {
-            // Dismiss the modal via its AcceptButton (OK). The modal is focused
-            // on open, so a global Enter press reaches it.
-            await Task.Delay(500);
-            FlaUI.Core.Input.Keyboard.Press(FlaUI.Core.WindowsAPI.VirtualKeyShort.ENTER);
-            await Task.Delay(500);
-        }
+            @ref = btnRef2,
+            modifiers = new[] { "ctrl" }
+        });
+        _output.WriteLine($"Click result: {result}");
+        Assert.Contains("[ctrl]", result);
+        await Task.Delay(100);
+
+        var snapshotAfterCtrl = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
+        var ctrlLine = snapshotAfterCtrl.Split('\n').FirstOrDefault(l => l.Contains("Last click modifiers"));
+        _output.WriteLine($"After ctrl-click: {ctrlLine}");
+        Assert.NotNull(ctrlLine);
+        Assert.Contains("Control", ctrlLine);
+    }
+
+    [Fact]
+    public async Task WinForms_Click_UnknownModifier_ReturnsError()
+    {
+        var btnRef = await _fixture.NavigateToTabAndFind(
+            _fixture.WinFormsHandle, "Buttons", "Click Me");
+
+        var clickTool = new ClickTool(_fixture.Elements);
+        var result = await _fixture.CallTool(clickTool, new
+        {
+            @ref = btnRef,
+            modifiers = new[] { "hyper" }
+        });
+        _output.WriteLine($"Result: {result}");
+        Assert.Contains("Unknown modifier", result);
     }
 }

@@ -115,6 +115,32 @@ namespace WinFormsTestApp
             radioLayout.Controls.Add(radio3);
             layout.Controls.Add(radioGroup);
 
+            // Button that captures Control.ModifierKeys at click time so tests
+            // can verify windows_click's modifiers parameter actually held the
+            // requested keys during the click (issue #34).
+            var modifierLabel = new Label
+            {
+                Text = "Last click modifiers: (none yet)",
+                Name = "ModifierResultLabel",
+                AutoSize = true
+            };
+            var modifierButton = new Button
+            {
+                Text = "Modifier Test Button",
+                Name = "ModifierTestButton",
+                AutoSize = true
+            };
+            modifierButton.Click += (s, e) =>
+            {
+                var mods = Control.ModifierKeys;
+                modifierLabel.Text = mods == Keys.None
+                    ? "Last click modifiers: None"
+                    : $"Last click modifiers: {mods}";
+            };
+            layout.Controls.Add(new Label { Text = "", AutoSize = true }); // spacer
+            layout.Controls.Add(modifierButton);
+            layout.Controls.Add(modifierLabel);
+
             return tab;
         }
 
