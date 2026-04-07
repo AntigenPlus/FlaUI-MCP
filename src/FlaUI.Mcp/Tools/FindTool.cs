@@ -149,13 +149,21 @@ public class FindTool : ToolBase
                     return ErrorResult($"Unknown pattern: {patternFilter}. Valid patterns: invoke, value, toggle, selection, expandcollapse, scroll, grid, table, text, rangevalue");
                 }
 
-                var matches = new List<(AutomationElement Element, string RefId)>();
-                FindMatchingElements(handle!, window, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, 0, maxDepth, maxResults);
+                // Walk first, register at the end. If the walk throws partway
+                // through, no registry entries are created — important because
+                // UiaRetry will retry the whole lambda on transient COMException
+                // and we don't want orphan refs accumulating across attempts.
+                var matchedElements = new List<AutomationElement>();
+                FindMatchingElements(window, matchedElements, nameFilter, automationIdFilter, roleFilter, patternFilter, 0, maxDepth, maxResults);
 
-                if (matches.Count == 0)
+                if (matchedElements.Count == 0)
                 {
                     return TextResult("No matching elements found.");
                 }
+
+                var matches = matchedElements
+                    .Select(e => (Element: e, RefId: _elementRegistry.Register(handle!, e)))
+                    .ToList();
 
                 var sb = new StringBuilder();
                 var truncated = matches.Count >= maxResults;
@@ -177,10 +185,9 @@ public class FindTool : ToolBase
         }
     }
 
-    private void FindMatchingElements(
-        string windowHandle,
+    private static void FindMatchingElements(
         AutomationElement element,
-        List<(AutomationElement, string)> matches,
+        List<AutomationElement> matches,
         string? nameFilter,
         string? automationIdFilter,
         string? roleFilter,
@@ -194,8 +201,7 @@ public class FindTool : ToolBase
 
         if (MatchesCriteria(element, nameFilter, automationIdFilter, roleFilter, patternFilter))
         {
-            var refId = _elementRegistry.Register(windowHandle, element);
-            matches.Add((element, refId));
+            matches.Add(element);
             if (matches.Count >= maxResults) return;
         }
 
@@ -205,7 +211,7 @@ public class FindTool : ToolBase
             var children = element.FindAllChildren();
             foreach (var child in children)
             {
-                FindMatchingElements(windowHandle, child, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, currentDepth + 1, maxDepth, maxResults);
+                FindMatchingElements(child, matches, nameFilter, automationIdFilter, roleFilter, patternFilter, currentDepth + 1, maxDepth, maxResults);
                 if (matches.Count >= maxResults) return;
             }
         }

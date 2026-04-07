@@ -80,7 +80,7 @@ public class ClickTool : ToolBase
         var doubleClick = GetBoolArgument(arguments, "doubleClick", false);
         var modifierNames = GetArgument<string[]>(arguments, "modifiers") ?? Array.Empty<string>();
 
-        if (!TryParseModifiers(modifierNames, out var modifierKeys, out var modifierError))
+        if (!ModifierKeyParser.TryParse(modifierNames, out var modifierKeys, out var modifierError))
         {
             return Task.FromResult(ErrorResult(modifierError!));
         }
@@ -215,34 +215,4 @@ public class ClickTool : ToolBase
         }
     }
 
-    /// <summary>
-    /// Parse modifier name strings (matching the schema in PressKeyTool) into
-    /// VirtualKeyShort values. On error, returns false with a user-facing message.
-    /// </summary>
-    private static bool TryParseModifiers(
-        string[] modifiers,
-        out List<VirtualKeyShort> result,
-        out string? error)
-    {
-        result = new List<VirtualKeyShort>(modifiers.Length);
-        foreach (var mod in modifiers)
-        {
-            var modKey = mod.ToLowerInvariant() switch
-            {
-                "ctrl" or "control" => VirtualKeyShort.CONTROL,
-                "shift" => VirtualKeyShort.SHIFT,
-                "alt" => VirtualKeyShort.ALT,
-                "win" or "windows" or "meta" or "super" => VirtualKeyShort.LWIN,
-                _ => (VirtualKeyShort?)null
-            };
-            if (modKey == null)
-            {
-                error = $"Unknown modifier: '{mod}'. Use 'ctrl', 'shift', 'alt', or 'win'.";
-                return false;
-            }
-            result.Add(modKey.Value);
-        }
-        error = null;
-        return true;
-    }
 }

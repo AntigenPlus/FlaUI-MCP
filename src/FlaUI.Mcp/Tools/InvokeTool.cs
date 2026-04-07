@@ -101,15 +101,11 @@ public class InvokeTool : ToolBase
     }
 
     /// <summary>
-    /// Race UIA Invoke against a short timeout. UIA Invoke is a synchronous
-    /// COM call that holds an RPC channel against the target process for the
-    /// entire duration of the invoked handler. If the handler doesn't return
-    /// promptly (e.g. it called ShowDialog on a modal), every subsequent UIA
-    /// call into that process queues behind the held channel and times out
-    /// (#32). When the timeout fires we return success with a warning so the
-    /// caller knows what happened and which tool to switch to. The background
-    /// Invoke is left running and completes when the invoked handler eventually
-    /// returns.
+    /// Race Invoke against a short timeout (#32). If the invoked handler
+    /// blocks (e.g. opens a modal), the background task is left running
+    /// and the caller gets a warning that names windows_click as the
+    /// alternative. The held-COM-channel side effect is explained in the
+    /// warning text itself.
     /// </summary>
     private static async Task<McpToolResult> InvokeWithHangDetection(AutomationElement element, string elementName)
     {

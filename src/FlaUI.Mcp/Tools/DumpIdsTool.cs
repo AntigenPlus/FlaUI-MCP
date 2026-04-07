@@ -111,7 +111,7 @@ public class DumpIdsTool : ToolBase
             return Task.FromResult(UiaRetry.With(() =>
             {
                 var rows = new List<Row>();
-                Walk(root, rows, includeEmptyIds, filter);
+                Walk(root, rows, includeEmptyIds, filter, depth: 0);
 
                 if (rows.Count == 0)
                 {
@@ -128,8 +128,16 @@ public class DumpIdsTool : ToolBase
         }
     }
 
-    private static void Walk(AutomationElement element, List<Row> rows, bool includeEmptyIds, Regex? filter)
+    /// <summary>Maximum tree depth walked.</summary>
+    private const int MaxDepth = 25;
+
+    /// <summary>Maximum rows collected before walking stops.</summary>
+    private const int MaxRows = 500;
+
+    private static void Walk(AutomationElement element, List<Row> rows, bool includeEmptyIds, Regex? filter, int depth)
     {
+        if (depth > MaxDepth || rows.Count >= MaxRows) return;
+
         try
         {
             var id = SnapshotBuilder.TryGetAutomationId(element);
@@ -142,11 +150,13 @@ public class DumpIdsTool : ToolBase
                     Name: SafeName(element),
                     Rect: SafeRect(element)
                 ));
+                if (rows.Count >= MaxRows) return;
             }
 
             foreach (var child in element.FindAllChildren())
             {
-                Walk(child, rows, includeEmptyIds, filter);
+                Walk(child, rows, includeEmptyIds, filter, depth + 1);
+                if (rows.Count >= MaxRows) return;
             }
         }
         catch

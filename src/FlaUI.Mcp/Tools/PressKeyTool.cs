@@ -83,23 +83,9 @@ public class PressKeyTool : ToolBase
                 return ErrorResult($"Unknown key: '{keyName}'");
             }
 
-            // Build modifier list
-            var modifierKeys = new List<VirtualKeyShort>();
-            foreach (var mod in modifiers)
+            if (!ModifierKeyParser.TryParse(modifiers, out var modifierKeys, out var modifierError))
             {
-                var modKey = mod.ToLowerInvariant() switch
-                {
-                    "ctrl" or "control" => VirtualKeyShort.CONTROL,
-                    "shift" => VirtualKeyShort.SHIFT,
-                    "alt" => VirtualKeyShort.ALT,
-                    "win" or "windows" or "meta" or "super" => VirtualKeyShort.LWIN,
-                    _ => (VirtualKeyShort?)null
-                };
-                if (modKey == null)
-                {
-                    return ErrorResult($"Unknown modifier: '{mod}'. Use 'ctrl', 'shift', 'alt', or 'win'.");
-                }
-                modifierKeys.Add(modKey.Value);
+                return ErrorResult(modifierError!);
             }
 
             // Send the key with proper press+release
