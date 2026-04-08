@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`windows_batch` rewritten to delegate to subtools** (#39). Each batch action now calls into the corresponding tool (`windows_click`, `windows_find`, etc.) instead of duplicating its logic, so features like modifier keys, hang detection, foreground handling, and transient-error retry are honored inside batches automatically. Adds two new actions:
+  - `find` — runs `windows_find` and supports `as: "name"` to bind the first matched element's ref to an alias
+  - `invoke` — runs `windows_invoke` (which `windows_batch` previously couldn't reach since it predated the click/invoke split in #32)
+  Subsequent actions can reference an alias via `ref: "@name"`. Example: `[{"action":"find","handle":"w5","automationId":"txtPatientID","as":"id"},{"action":"fill","ref":"@id","value":"FLAUI-A"}]`. The previous `click` behavior (UIA Invoke fallback) is replaced by delegation to the post-#32 `windows_click`, which is now mouse-only — use the new `invoke` action when you want the UIA Invoke pattern.
+- **`windows_batch` forgives `actions` passed as a JSON-encoded string.** Some MCP clients (and LLM agents) double-encode array arguments. Today's behavior was a cryptic `"requires Array, got String"` error from `JsonElement.EnumerateArray`; now the tool detects the case, parses the string, and proceeds — or returns a clear "pass actions as an array, not a JSON-encoded string" message if the parse fails.
+- **`windows_batch` returns clear errors for unknown action types** (#39). Previously an unrecognized action could surface as the same cryptic UIA-flavored type error; now it's `"action[N] has unknown action type 'X'. Supported: find, click, invoke, type, fill, wait, snapshot."`
+
 ### Fixed
 - **UIA-reading tools now transparently retry transient COMExceptions** (#38). UIA `FindFirst`/`FindAll` against WPF `DataGrid` (and occasionally other virtualized WPF controls) can throw `COMException` with `HResult` `E_UNEXPECTED` (`0x8000FFFF`) while the control updates its UIA tree — the exception looks catastrophic but almost always clears within 100–500ms. `windows_snapshot`, `windows_find`, `windows_list_windows`, `windows_get_text`, `windows_get_value`, `windows_table`, `windows_dump_ids`, and `windows_wait` now wrap their UIA work in a retry helper that catches `E_UNEXPECTED`, `RPC_E_DISCONNECTED` (`0x80010108`), `RPC_E_CALL_REJECTED` (`0x80010001`), and `0x80040201` ("event was unable to invoke any of the subscribers") with a `100ms / 200ms / 400ms` backoff. Total max added latency on the failing path: ~700ms. Zero overhead on the common path. Side-effect tools (`windows_click`, `windows_invoke`, `windows_type`, `windows_fill`, `windows_press_key`) deliberately do not retry — repeating an action could cause it to happen more than once.
 

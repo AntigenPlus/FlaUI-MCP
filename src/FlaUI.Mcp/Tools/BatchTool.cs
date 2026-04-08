@@ -1,32 +1,54 @@
 using System.Text.Json;
-using FlaUI.Core.AutomationElements;
-using FlaUI.Core.Input;
-using FlaUI.Core.WindowsAPI;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using PlaywrightWindows.Mcp.Core;
 
 namespace PlaywrightWindows.Mcp.Tools;
 
 /// <summary>
-/// Execute multiple actions in a single call for better performance
+/// Execute multiple actions in a single call. Each action delegates to the
+/// underlying tool (windows_click, windows_find, etc.) so features like
+/// modifier keys, hang detection, and transient-error retry come along for
+/// free. Batch actions can capture a find result with `as: "name"` and
+/// reference it from later actions with `ref: "@name"`.
 /// </summary>
 public class BatchTool : ToolBase
 {
     private readonly SessionManager _sessionManager;
     private readonly ElementRegistry _elementRegistry;
-    private readonly SnapshotBuilder _snapshotBuilder;
+
+    private readonly ClickTool _clickTool;
+    private readonly InvokeTool _invokeTool;
+    private readonly TypeTool _typeTool;
+    private readonly FillTool _fillTool;
+    private readonly SnapshotTool _snapshotTool;
+    private readonly FindTool _findTool;
+
+    private static readonly string[] SupportedActions =
+        { "find", "click", "invoke", "type", "fill", "wait", "snapshot" };
 
     public BatchTool(SessionManager sessionManager, ElementRegistry elementRegistry)
     {
         _sessionManager = sessionManager;
         _elementRegistry = elementRegistry;
-        _snapshotBuilder = new SnapshotBuilder(elementRegistry);
+        _clickTool = new ClickTool(elementRegistry);
+        _invokeTool = new InvokeTool(elementRegistry);
+        _typeTool = new TypeTool(elementRegistry);
+        _fillTool = new FillTool(elementRegistry);
+        _snapshotTool = new SnapshotTool(sessionManager, elementRegistry);
+        _findTool = new FindTool(sessionManager, elementRegistry);
     }
 
     public override string Name => "windows_batch";
 
-    public override string Description => 
-        "Execute multiple actions in a single call. Much faster than individual calls. " +
-        "Supports click, type, fill, and wait actions. Returns results for each action.";
+    public override string Description =>
+        "Execute multiple actions in a single call. Much faster than individual MCP round-trips. " +
+        "Each action delegates to the corresponding tool (windows_click, windows_find, etc.) so " +
+        "tool features like modifier keys, hang detection, and retry are honored. Use " +
+        "`as: \"name\"` on a find action to bind the first matched ref to an alias, then reference " +
+        "it from a later action with `ref: \"@name\"`. Supported actions: find, click, invoke, " +
+        "type, fill, wait, snapshot. ('wait' here is a fixed-millisecond sleep; for state-polling " +
+        "use windows_wait as a separate tool call.)";
 
     public override object InputSchema => new
     {
@@ -36,7 +58,8 @@ public class BatchTool : ToolBase
             actions = new
             {
                 type = "array",
-                description = "List of actions to execute in order",
+                description = "List of actions to execute in order. Each item is an object with " +
+                              "an 'action' field plus that action's parameters.",
                 items = new
                 {
                     type = "object",
@@ -45,39 +68,43 @@ public class BatchTool : ToolBase
                         action = new
                         {
                             type = "string",
-                            @enum = new[] { "click", "type", "fill", "wait", "snapshot" },
-                            description = "Action type"
+                            @enum = SupportedActions,
+                            description = "Which tool to invoke for this step"
                         },
                         @ref = new
                         {
                             type = "string",
-                            description = "Element ref for click/type/fill actions"
+                            description = "Element ref. Prefix with @ to reference an alias bound by a previous find action (e.g. \"@patientId\")."
                         },
-                        text = new
+                        @as = new
                         {
                             type = "string",
-                            description = "Text for type action"
-                        },
-                        value = new
-                        {
-                            type = "string",
-                            description = "Value for fill action"
-                        },
-                        ms = new
-                        {
-                            type = "integer",
-                            description = "Milliseconds for wait action (default: 100)"
+                            description = "On a find action, bind the first matched element's ref to this alias name. Subsequent actions can reference it via ref=\"@name\"."
                         },
                         handle = new
                         {
                             type = "string",
-                            description = "Window handle for snapshot action"
+                            description = "Window handle (used by find, snapshot)"
                         },
+                        name = new { type = "string", description = "Element name (find action)" },
+                        automationId = new { type = "string", description = "Element AutomationId (find action)" },
+                        role = new { type = "string", description = "Element role (find action)" },
+                        text = new { type = "string", description = "Text to type (type action)" },
+                        value = new { type = "string", description = "Value to fill (fill action)" },
+                        button = new { type = "string", description = "Mouse button for click (left/right/middle)" },
+                        doubleClick = new { type = "boolean", description = "Double-click (click action)" },
+                        modifiers = new
+                        {
+                            type = "array",
+                            items = new { type = "string" },
+                            description = "Modifier keys held during click (ctrl/shift/alt/win)"
+                        },
+                        ms = new { type = "integer", description = "Milliseconds for wait action (default 100)" },
                         backend = new
                         {
                             type = "string",
                             @enum = new[] { "uia3", "uia2" },
-                            description = "Automation backend for snapshot action. UIA3 (default) works best for WPF/UWP. UIA2 may provide better results for older WinForms controls."
+                            description = "Snapshot backend"
                         }
                     },
                     required = new[] { "action" }
@@ -92,204 +119,199 @@ public class BatchTool : ToolBase
         required = new[] { "actions" }
     };
 
-    public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
+    public override async Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
-        if (arguments == null || !arguments.Value.TryGetProperty("actions", out var actionsElement))
+        if (arguments == null || !arguments.Value.TryGetProperty("actions", out var actionsRaw))
         {
-            return Task.FromResult(ErrorResult("Missing required argument: actions"));
+            return ErrorResult("Missing required argument: actions");
         }
 
-        var stopOnError = true;
-        if (arguments.Value.TryGetProperty("stopOnError", out var stopProp))
+        if (!TryNormalizeActionsArray(actionsRaw, out var actionsArray, out var normalizeError))
         {
-            stopOnError = stopProp.GetBoolean();
+            return ErrorResult(normalizeError!);
         }
 
+        var stopOnError = GetBoolArgument(arguments, "stopOnError", true);
+
+        var aliases = new Dictionary<string, string>();
         var results = new List<string>();
-        var actions = actionsElement.EnumerateArray().ToList();
+        var actions = actionsArray.EnumerateArray().ToList();
 
-        foreach (var (actionObj, index) in actions.Select((a, i) => (a, i)))
+        for (int i = 0; i < actions.Count; i++)
         {
+            var actionObj = actions[i];
+
             try
             {
-                var actionType = actionObj.GetProperty("action").GetString();
-                var result = actionType switch
+                var actionType = actionObj.TryGetProperty("action", out var typeProp) && typeProp.ValueKind == JsonValueKind.String
+                    ? typeProp.GetString()
+                    : null;
+
+                if (string.IsNullOrEmpty(actionType))
                 {
-                    "click" => ExecuteClick(actionObj),
-                    "type" => ExecuteType(actionObj),
-                    "fill" => ExecuteFill(actionObj),
-                    "wait" => ExecuteWait(actionObj),
-                    "snapshot" => ExecuteSnapshot(actionObj),
-                    _ => $"Unknown action: {actionType}"
-                };
-                results.Add($"{index + 1}. {actionType}: {result}");
+                    results.Add($"{i + 1}. ERROR: action[{i}] missing required 'action' field");
+                    if (stopOnError) { results.Add($"Stopped at action {i + 1} due to error"); break; }
+                    continue;
+                }
+
+                if (!SupportedActions.Contains(actionType))
+                {
+                    results.Add($"{i + 1}. ERROR: action[{i}] has unknown action type '{actionType}'. Supported: {string.Join(", ", SupportedActions)}.");
+                    if (stopOnError) { results.Add($"Stopped at action {i + 1} due to error"); break; }
+                    continue;
+                }
+
+                var resolvedAction = ResolveAliases(actionObj, aliases, out var aliasError);
+                if (aliasError != null)
+                {
+                    results.Add($"{i + 1}. ERROR: {aliasError}");
+                    if (stopOnError) { results.Add($"Stopped at action {i + 1} due to error"); break; }
+                    continue;
+                }
+
+                var resultText = await ExecuteActionAsync(actionType, resolvedAction);
+
+                // For find actions, capture the first matched ref under the requested alias.
+                if (actionType == "find"
+                    && actionObj.TryGetProperty("as", out var asProp)
+                    && asProp.ValueKind == JsonValueKind.String)
+                {
+                    var aliasName = asProp.GetString();
+                    if (!string.IsNullOrEmpty(aliasName))
+                    {
+                        var match = Regex.Match(resultText, @"\[ref=(\w+)");
+                        if (match.Success)
+                        {
+                            aliases[aliasName] = match.Groups[1].Value;
+                        }
+                    }
+                }
+
+                results.Add($"{i + 1}. {actionType}: {resultText}");
             }
             catch (Exception ex)
             {
-                results.Add($"{index + 1}. ERROR: {ex.Message}");
+                results.Add($"{i + 1}. ERROR: {ex.Message}");
                 if (stopOnError)
                 {
-                    results.Add($"Stopped at action {index + 1} due to error");
+                    results.Add($"Stopped at action {i + 1} due to error");
                     break;
                 }
             }
         }
 
-        return Task.FromResult(TextResult(string.Join("\n", results)));
+        return TextResult(string.Join("\n", results));
     }
 
-    private string ExecuteClick(JsonElement action)
+    /// <summary>
+    /// Forgive callers who pass `actions` as a JSON-encoded string instead of
+    /// a JSON array (a common LLM/serialization mistake). If actions is a
+    /// string, try to parse it as JSON; if it parses to an array, use that.
+    /// Returns false with a user-facing error otherwise.
+    /// </summary>
+    private static bool TryNormalizeActionsArray(JsonElement raw, out JsonElement actionsArray, out string? error)
     {
-        var refId = action.TryGetProperty("ref", out var refProp) ? refProp.GetString() : null;
-        if (string.IsNullOrEmpty(refId))
+        actionsArray = raw;
+        error = null;
+
+        if (raw.ValueKind == JsonValueKind.Array)
         {
-            return "Missing ref";
+            return true;
         }
 
-        var element = _elementRegistry.GetElement(refId);
-        if (element == null)
+        if (raw.ValueKind == JsonValueKind.String)
         {
-            return $"Element not found: {refId}";
-        }
-
-        var elementName = element.Properties.Name.ValueOrDefault ?? refId;
-
-        // Try Invoke pattern first
-        if (element.Patterns.Invoke.IsSupported)
-        {
-            element.Patterns.Invoke.Pattern.Invoke();
-            return $"Invoked {elementName}";
-        }
-
-        // Try Toggle pattern
-        if (element.Patterns.Toggle.IsSupported)
-        {
-            element.Patterns.Toggle.Pattern.Toggle();
-            return $"Toggled {elementName}";
-        }
-
-        // Fall back to mouse click
-        var clickPoint = element.GetClickablePoint();
-        Mouse.Click(clickPoint);
-        return $"Clicked {elementName}";
-    }
-
-    private string ExecuteType(JsonElement action)
-    {
-        var text = action.TryGetProperty("text", out var textProp) ? textProp.GetString() : null;
-        if (string.IsNullOrEmpty(text))
-        {
-            return "Missing text";
-        }
-
-        var refId = action.TryGetProperty("ref", out var refProp) ? refProp.GetString() : null;
-        if (!string.IsNullOrEmpty(refId))
-        {
-            var element = _elementRegistry.GetElement(refId);
-            if (element == null)
+            var s = raw.GetString();
+            if (string.IsNullOrWhiteSpace(s))
             {
-                return $"Element not found: {refId}";
+                error = "'actions' was an empty string. Pass an array of action objects.";
+                return false;
             }
-            element.Focus();
-            Thread.Sleep(30);
+            try
+            {
+                // Note: this JsonDocument is intentionally not disposed. It
+                // owns the backing memory for the returned JsonElement, which
+                // must outlive this call. GC will reclaim it once the parent
+                // tool call returns.
+                var parsed = JsonDocument.Parse(s);
+                if (parsed.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    error = "'actions' was a string but did not parse to a JSON array. Pass actions as an array of action objects (not a JSON-encoded string).";
+                    return false;
+                }
+                actionsArray = parsed.RootElement;
+                return true;
+            }
+            catch (JsonException ex)
+            {
+                error = $"'actions' was a string but did not parse as JSON: {ex.Message}. Pass actions as an array of action objects (not a JSON-encoded string).";
+                return false;
+            }
         }
 
-        Keyboard.Type(text);
-        return $"Typed \"{text}\"";
+        error = $"'actions' must be an array of action objects, got {raw.ValueKind}.";
+        return false;
     }
 
-    private string ExecuteFill(JsonElement action)
+    private async Task<string> ExecuteActionAsync(string actionType, JsonElement action)
     {
-        var refId = action.TryGetProperty("ref", out var refProp) ? refProp.GetString() : null;
-        var value = action.TryGetProperty("value", out var valProp) ? valProp.GetString() : null;
-
-        if (string.IsNullOrEmpty(refId) || value == null)
+        return actionType switch
         {
-            return "Missing ref or value";
-        }
-
-        var element = _elementRegistry.GetElement(refId);
-        if (element == null)
-        {
-            return $"Element not found: {refId}";
-        }
-
-        if (element.Patterns.Value.IsSupported)
-        {
-            element.Patterns.Value.Pattern.SetValue(value);
-            return $"Filled with \"{value}\"";
-        }
-
-        // Fallback
-        element.Focus();
-        Thread.Sleep(30);
-        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
-        Thread.Sleep(30);
-        Keyboard.Type(value);
-        return $"Filled with \"{value}\"";
+            "wait" => ExecuteWait(action),
+            "find" => await CallTool(_findTool, action),
+            "click" => await CallTool(_clickTool, action),
+            "invoke" => await CallTool(_invokeTool, action),
+            "type" => await CallTool(_typeTool, action),
+            "fill" => await CallTool(_fillTool, action),
+            "snapshot" => await CallTool(_snapshotTool, action),
+            _ => throw new InvalidOperationException($"Internal error: unhandled action {actionType}")
+        };
     }
 
-    private string ExecuteWait(JsonElement action)
+    private static async Task<string> CallTool(ToolBase tool, JsonElement action)
     {
-        var ms = action.TryGetProperty("ms", out var msProp) ? msProp.GetInt32() : 100;
+        var result = await tool.ExecuteAsync(action);
+        return result.Content.FirstOrDefault()?.Text ?? "";
+    }
+
+    private static string ExecuteWait(JsonElement action)
+    {
+        var ms = action.TryGetProperty("ms", out var msProp) && msProp.ValueKind == JsonValueKind.Number
+            ? msProp.GetInt32()
+            : 100;
         Thread.Sleep(ms);
         return $"Waited {ms}ms";
     }
 
-    private string ExecuteSnapshot(JsonElement action)
+    /// <summary>
+    /// If the action's "ref" field starts with @, look up the alias and
+    /// substitute the bound ref id. Returns a new JsonElement with the
+    /// substitution applied (or the original if no substitution is needed).
+    /// On unknown alias, sets error and returns the original element.
+    /// </summary>
+    private static JsonElement ResolveAliases(JsonElement action, IReadOnlyDictionary<string, string> aliases, out string? error)
     {
-        var handle = action.TryGetProperty("handle", out var handleProp) ? handleProp.GetString() : null;
-        var backend = action.TryGetProperty("backend", out var backendProp) ? backendProp.GetString() : null;
-
-        Window? window = null;
-        if (!string.IsNullOrEmpty(handle))
+        error = null;
+        if (!action.TryGetProperty("ref", out var refProp) || refProp.ValueKind != JsonValueKind.String)
         {
-            window = _sessionManager.GetWindow(handle);
-            if (window == null)
-            {
-                return $"Window not found: {handle}";
-            }
-        }
-        else
-        {
-            // Get focused window
-            var focusedElement = _sessionManager.Automation.FocusedElement();
-            if (focusedElement != null)
-            {
-                var current = focusedElement;
-                while (current != null)
-                {
-                    if (current.Properties.ControlType.ValueOrDefault == FlaUI.Core.Definitions.ControlType.Window)
-                    {
-                        window = current.AsWindow();
-                        handle = _sessionManager.RegisterWindow(window);
-                        break;
-                    }
-                    current = current.Parent;
-                }
-            }
+            return action;
         }
 
-        if (window == null)
+        var refValue = refProp.GetString();
+        if (refValue == null || !refValue.StartsWith("@"))
         {
-            return "No window found";
+            return action;
         }
 
-        // If UIA2 backend requested, get the window via its native handle
-        if (string.Equals(backend, "uia2", StringComparison.OrdinalIgnoreCase))
+        var aliasName = refValue.Substring(1);
+        if (!aliases.TryGetValue(aliasName, out var actualRef))
         {
-            var hwnd = window.Properties.NativeWindowHandle.ValueOrDefault;
-            if (hwnd != IntPtr.Zero)
-            {
-                var uia2Window = _sessionManager.UIA2Automation.FromHandle(hwnd)?.AsWindow();
-                if (uia2Window != null)
-                {
-                    window = uia2Window;
-                }
-            }
+            error = $"Unknown alias: '@{aliasName}'. Did a previous find action with as='{aliasName}' fail or return no matches?";
+            return action;
         }
 
-        var snapshot = _snapshotBuilder.BuildSnapshot(handle!, window);
-        return $"\n{snapshot}";
+        var node = JsonNode.Parse(action.GetRawText())!.AsObject();
+        node["ref"] = actualRef;
+        return JsonDocument.Parse(node.ToJsonString()).RootElement;
     }
 }
